@@ -1,0 +1,122 @@
+module cache.kv {
+
+  spec {
+    intent "提供带 TTL 支持的通用 key-value cache 边界。通过 time.clock 集中处理 cache expiration 的时间读取，避免其他模块隐式读取时钟。get 在返回值前检查 TTL 是否过期，set 记录写入时刻以计算过期时间。"
+
+    imports [time.clock]
+
+    interface {
+      // 公开 types
+      type CacheKey    // 不透明 cache key；内部表示：String
+      type CacheTtl    // 不透明 TTL 时长；内部表示：u64（秒）；独立类型，不复用 time.clock.Duration
+
+      // 公开 functions
+      fn get(key: CacheKey) -> Option
+        effects [reads_clock]
+        // 读取 time.clock.now() 检查条目是否过期；过期则返回 None
+
+      fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()
+        effects [reads_clock]
+        // 读取 time.clock.now() 记录写入时刻，用于后续 TTL 计算
+
+      fn delete(key: CacheKey) -> ()
+        // 纯删除操作；不需要读取时钟
+    }
+
+    effects [reads_clock]
+    // reads_clock 传播自 time.clock.now() 调用；get 和 set 均须读取当前时间
+    // 无其他 effects：cache.kv 不写持久化存储，不记录 audit log
+  }
+
+  checks {
+    examples {
+      example set_and_get {
+        // 验证：写入一个带 TTL 的条目后，在未过期前能取回值
+        // 对应 examples/cache_kv_set_and_get.rs（cargo test --example cache_kv_set_and_get）
+        let key = cache.kv.CacheKey("user:42");
+        let ttl = cache.kv.CacheTtl(300);
+        cache.kv.set(key, "profile_data", ttl);
+        let result = cache.kv.get(key);
+        assert result.is_some();
+      }
+
+      example expired_entry_returns_none {
+        // 验证：TTL 为 0 秒的条目（立即过期）get 时返回 None
+        // 对应 examples/cache_kv_expired_entry_returns_none.rs
+        let key = cache.kv.CacheKey("user:99");
+        let ttl = cache.kv.CacheTtl(0);
+        cache.kv.set(key, "stale_data", ttl);
+        let result = cache.kv.get(key);
+        assert result.is_none();
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `cache.kv` — generic TTL-aware key-value cache boundary.
+    //!
+    //! This module provides a narrow cache interface with explicit TTL support.
+    //! All clock reads for expiry checking are funnelled through `time.clock`,
+    //! so that:
+    //!
+    //! - LLM agents can find every time-dependent cache operation by querying
+    //!   the Semantic DB for modules that declare `reads_clock`.
+    //! - Tests can substitute a controlled clock without modifying this module.
+    //!
+    //! # Effects
+    //! - `reads_clock`: declared at module level; introduced by `get` (expiry
+    //!   check) and `set` (write-time recording). `delete` is pure.
+    //!
+    //! # Imports
+    //! - `time.clock`: provides `Timestamp` and `now()` for TTL computation.
+    //!
+    //! # Non-goals (v0 skeleton)
+    //! The current implementation is a skeleton (`todo!()`). A real
+    //! implementation would maintain an in-memory map from `CacheKey` to
+    //! `(value, expiry_timestamp)` and call `time.clock::now()` at `get`/`set`.
+
+    /// Opaque cache key. The inner `String` is not exposed to prevent callers
+    /// from constructing keys without going through the designated constructor.
+    #[allow(dead_code)]
+    pub struct CacheKey(String);
+
+    /// Opaque TTL duration in seconds. Kept distinct from `time.clock::Duration`
+    /// to avoid coupling the cache interface to the clock module's internal
+    /// representation in v0.
+    #[allow(dead_code)]
+    pub struct CacheTtl(u64);
+
+    /// Look up a cache entry by key.
+    ///
+    /// Reads the current wall-clock time via `time.clock::now()` to check
+    /// whether the stored entry has passed its TTL. Returns `None` if the key
+    /// is absent or the entry has expired.
+    ///
+    /// # Effects
+    /// - `reads_clock`: reads system time to evaluate TTL expiry.
+    pub fn get(_key: CacheKey) -> Option<String> {
+        todo!("cache.kv::get: real implementation pending")
+    }
+
+    /// Insert or overwrite a cache entry with the given TTL.
+    ///
+    /// Records the current wall-clock time via `time.clock::now()` alongside
+    /// the value so that `get` can compute the absolute expiry instant.
+    ///
+    /// # Effects
+    /// - `reads_clock`: reads system time to record the insertion timestamp.
+    pub fn set(_key: CacheKey, _value: String, _ttl: CacheTtl) {
+        todo!("cache.kv::set: real implementation pending")
+    }
+
+    /// Remove a cache entry unconditionally.
+    ///
+    /// Pure operation: does not read the clock or access any other module.
+    pub fn delete(_key: CacheKey) {
+        todo!("cache.kv::delete: real implementation pending")
+    }
+  }
+
+}

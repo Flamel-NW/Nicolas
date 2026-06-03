@@ -79,6 +79,16 @@ Rules may have different check modes:
 
 For subjective concerns such as API naming, design simplicity, abstraction quality, example representativeness, or whether a change preserves product intent, Nicolas should produce evidence packages, risk assessments, suggested fixes, or recommendations to ask the user rather than fake certainty. If a rule cannot be objectively checked, it should not pretend to be an objective gate.
 
+## Effects And Formal Verification
+
+In Nicolas, side effects are not comments or informal annotations. They are structured declarations that the toolchain can check mechanically.
+
+Nicolas enforces a key constraint: an `implementation` block may only produce side effects by calling other Nicolas modules' public functions, not by calling system APIs directly. For example, only the `time.clock` module may call `std::time::SystemTime::now()`. Any other module that wants the current time must call `time.clock.now()`, which declares the `reads_clock` effect. This makes the effect dependency graph of the entire project traceable and verifiable without asking an LLM.
+
+Given this constraint, effect annotations in module interfaces are not declarations that require trust. They are mechanical facts that the toolchain can derive: a function's effects equal the union of the effects of the Nicolas module functions it calls. The toolchain checks that declared effects match computed effects. Discrepancies are hard errors.
+
+This is part of a broader design principle: wherever structural properties of a module can be derived from the implementation code by a program, Nicolas derives them rather than trusting LLM declarations. Side effects, public API shapes, imports, and type structures can all be computed mechanically. Only genuinely semantic properties — design intent, representative usage examples, business tests, and change-process rules — require human or LLM authorship.
+
 ## Semantic DB
 
 Nicolas plans to generate structured semantic artifacts as part of the toolchain.
@@ -111,10 +121,12 @@ Nothing in this repository should be considered stable yet.
 - Make module boundaries explicit.
 - Prefer explicit structure over clever shorthand.
 - Prefer compiler-checked structure over informal comments.
+- **Derive structural module properties from code; do not trust LLM declarations for facts that can be formally computed.** Imports, public API shapes, effects, and type structures should be mechanically derived from the implementation, not authored in a spec section and taken on faith.
 - Separate hard-checked facts from advisory metadata.
 - Treat rules as first-class semantic policies for LLM-generated changes.
 - Treat LLM agents as useful but untrusted operators.
 - Distinguish deterministic facts from heuristic and LLM-assisted judgments.
+- Prefer deterministic and heuristic checks over LLM-assisted checks. Involve LLMs in validation only when mechanical analysis is genuinely insufficient.
 - Treat examples as mandatory executable usage tests.
 - Keep tests focused on business logic correctness.
 - Optimize for reliable code understanding, generation, modification, and explanation.
