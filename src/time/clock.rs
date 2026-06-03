@@ -1,0 +1,43 @@
+//! `time.clock` — narrow wall-clock boundary.
+//!
+//! This module provides the current wall-clock time through a single
+//! opaque interface. All `reads_clock` effects in the codebase are
+//! intended to be funnelled through this module, so that:
+//!
+//! - LLM agents can find every time-reading callsite by querying the
+//!   Semantic DB for modules that declare `reads_clock`.
+//! - Tests and examples can substitute a controlled clock without
+//!   modifying the modules that depend on `time.clock`.
+//!
+//! # `.nico` source
+//! Corresponds to: `module time.clock` in `src/time/clock.nico` (draft).
+//!
+//! # Effects
+//! - `reads_clock`: declared at module level; introduced by `now()`.
+
+/// Opaque wall-clock timestamp (internal precision: microseconds).
+///
+/// The internal representation is intentionally not exposed so that
+/// downstream modules cannot construct arbitrary `Timestamp` values
+/// without going through `now()` or a controlled test helper.
+#[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
+pub struct Timestamp(u64);
+
+/// A duration of time (internal precision: microseconds).
+///
+/// Kept opaque for the same reason as `Timestamp`.
+#[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
+pub struct Duration(u64);
+
+/// Returns the current wall-clock time.
+///
+/// # Effects
+/// - `reads_clock`: reads the system clock.
+///
+/// # Notes
+/// This is a skeleton implementation (`todo!()`). The real
+/// implementation will call the OS time API and return a `Timestamp`
+/// wrapping the microseconds since the Unix epoch.
+pub fn now() -> Timestamp {
+    todo!("time.clock::now: real implementation pending")
+}

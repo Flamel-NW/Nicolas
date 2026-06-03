@@ -97,9 +97,11 @@ Semantic DB is a means to support LLMOP, not the entire purpose of Nicolas. The 
 
 ## Status
 
-Nicolas is currently in the project-definition and research phase.
+Nicolas is in an early prototype phase.
 
-The first prototype is expected to be small and experimental. It may start with a restricted compilation target and a minimal `.nico` module format, then evolve as the language design becomes clearer.
+The `rust-prototype` branch contains the first Rust skeleton: a minimal Cargo project with the `time.clock` module (`Timestamp`, `Duration`, `now()`). This skeleton validates the module structure and serves as the baseline for early evaluation experiments. Function bodies are stubs; the full implementation is pending.
+
+The `.nico` source format, the compilation pipeline, the Semantic JSON schema, and the Semantic DB schema are all still being designed. Language design decisions are guided by controlled evaluation: comparing LLM task performance with raw Rust source versus Nicolas semantic artifacts.
 
 Nothing in this repository should be considered stable yet.
 

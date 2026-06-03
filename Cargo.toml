@@ -1,0 +1,9 @@
+[package]
+name = "nicolas"
+version = "0.1.0"
+edition = "2021"
+description = "A language and toolchain for LLM-Oriented Programming."
+license = "Apache-2.0"
+
+# No external dependencies in v0 prototype skeleton.
+[dependencies]
