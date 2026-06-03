@@ -5,8 +5,8 @@ module time.clock {
 
     interface {
       // 公开 types
-      type Timestamp   // 不透明时间戳，内部精度：微秒
-      type Duration    // 时间跨度，内部精度：微秒
+      type Timestamp   // 不透明时间戳，内部精度：纳秒
+      type Duration    // 时间跨度，内部精度：纳秒
 
       // 公开 functions
       fn now() -> Timestamp
@@ -47,7 +47,7 @@ module time.clock {
     //! # Effects
     //! - `reads_clock`: declared at module level; introduced by `now()`.
 
-    /// Opaque wall-clock timestamp (internal precision: microseconds).
+    /// Opaque wall-clock timestamp (internal precision: nanoseconds).
     ///
     /// The internal representation is intentionally not exposed so that
     /// downstream modules cannot construct arbitrary `Timestamp` values
@@ -55,7 +55,7 @@ module time.clock {
     #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
     pub struct Timestamp(u64);
 
-    /// A duration of time (internal precision: microseconds).
+    /// A duration of time (internal precision: nanoseconds).
     ///
     /// Kept opaque for the same reason as `Timestamp`.
     #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
@@ -69,7 +69,7 @@ module time.clock {
     /// # Notes
     /// This is a skeleton implementation (`todo!()`). The real
     /// implementation will call the OS time API and return a `Timestamp`
-    /// wrapping the microseconds since the Unix epoch.
+    /// wrapping the nanoseconds since the Unix epoch.
     pub fn now() -> Timestamp {
         todo!("time.clock::now: real implementation pending")
     }

@@ -1,0 +1,119 @@
+module user.profile_service {
+
+  spec {
+    intent "组合 cache.kv、user.store 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。"
+
+    imports [user.types, cache.kv, user.store]
+
+    interface {
+      fn get_profile(id: UserId) -> Option
+        effects [reads_clock, db.read]
+        // reads_clock：通过 cache.kv.get() 检查 cache TTL（time.clock 是边界模块）
+        // db.read：cache miss 时通过 user.store.load_profile() 读取持久化存储
+
+      fn update_profile(profile: UserProfile) -> ()
+        effects [reads_clock, db.read, db.write]
+        // reads_clock：通过 cache.kv.set() 写入带 TTL 的 cache（time.clock 是边界模块）
+        // db.read + db.write：通过 user.store.save_profile() 读取后写回持久化存储
+    }
+
+    effects [reads_clock, db.read, db.write]
+    // reads_clock：传播自 cache.kv（cache.kv 的 reads_clock 来自 time.clock）
+    // db.read：传播自 user.store（user.store 是 db.read 的边界模块）
+    // db.write：传播自 user.store（user.store 是 db.write 的边界模块）
+    // user.types 无 effects，import 不带来 effect 传播
+  }
+
+  checks {
+    examples {
+      example get_existing_profile {
+        // 验证：cache miss 时从 store 加载，并回填 cache
+        // 对应 examples/user_profile_service_get_existing_profile.rs
+        let id     = user.types.new_user_id(1);
+        let result = user.profile_service.get_profile(id);
+        assert result.is_some();
+      }
+
+      example update_and_get {
+        // 验证：update 后 get 能取到新值
+        // 对应 examples/user_profile_service_update_and_get.rs
+        let id      = user.types.new_user_id(42);
+        let email   = user.types.new_email("carol@example.com");
+        let profile = user.types.new_profile(id, email.unwrap(), UserStatus::Active);
+        user.profile_service.update_profile(profile);
+        let loaded  = user.profile_service.get_profile(user.types.new_user_id(42));
+        assert loaded.is_some();
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `user.profile_service` — orchestration layer for user profile operations.
+    //!
+    //! This module combines `cache.kv`, `user.store`, and `user.types` to
+    //! provide the primary user-facing profile API. It implements a cache
+    //! read-through pattern:
+    //!
+    //! - `get_profile`: check cache first; on miss, load from store and
+    //!   backfill cache.
+    //! - `update_profile`: write to store, then invalidate / update cache.
+    //!
+    //! All clock reads for cache TTL computation are funnelled through
+    //! `cache.kv`, which in turn uses `time.clock`. This module never reads
+    //! the clock directly.
+    //!
+    //! # Effects
+    //! - `reads_clock`: propagated from `cache.kv` (which declares it via
+    //!   `time.clock`). Triggered by every cache read or write.
+    //! - `db.read`:  propagated from `user.store`. Triggered by
+    //!   `get_profile` (cache miss path) and `update_profile` (read-before-write).
+    //! - `db.write`: propagated from `user.store`. Triggered by
+    //!   `update_profile` (writing the updated profile back to storage).
+    //!
+    //! # Imports
+    //! - `user.types`: provides `UserId`, `UserProfile`.
+    //! - `cache.kv`:   provides `get`, `set`, `delete` (cache boundary).
+    //! - `user.store`: provides `load_profile`, `save_profile` (storage boundary).
+
+    #[allow(unused_imports)]
+    use super::types::{UserId, UserProfile};
+    #[allow(unused_imports)]
+    use super::store;
+    #[allow(unused_imports)]
+    use crate::cache::kv;
+
+    /// Retrieve the user profile for the given ID.
+    ///
+    /// Checks the cache first. On a cache miss, loads the profile from
+    /// `user.store` and backfills the cache. Returns `None` if no profile
+    /// exists in either the cache or the store.
+    ///
+    /// # Effects
+    /// - `reads_clock`: via `cache.kv.get()`, which checks the entry TTL
+    ///   using `time.clock::now()`.
+    /// - `db.read`: via `user.store::load_profile()` on a cache miss.
+    pub fn get_profile(_id: UserId) -> Option<UserProfile> {
+        todo!("user.profile_service::get_profile: real implementation pending")
+    }
+
+    /// Persist an updated user profile and refresh the cache.
+    ///
+    /// Writes the profile to `user.store`, then updates or invalidates the
+    /// corresponding cache entry so that subsequent `get_profile` calls
+    /// see the new data.
+    ///
+    /// # Effects
+    /// - `reads_clock`: via `cache.kv.set()`, which records the insertion
+    ///   timestamp using `time.clock::now()`.
+    /// - `db.read`:  via `user.store::save_profile()` (read-before-write
+    ///   in the storage layer).
+    /// - `db.write`: via `user.store::save_profile()` (writing the updated
+    ///   profile).
+    pub fn update_profile(_profile: UserProfile) {
+        todo!("user.profile_service::update_profile: real implementation pending")
+    }
+  }
+
+}

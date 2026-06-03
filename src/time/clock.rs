@@ -14,7 +14,7 @@
 //! # Effects
 //! - `reads_clock`: declared at module level; introduced by `now()`.
 
-/// Opaque wall-clock timestamp (internal precision: microseconds).
+/// Opaque wall-clock timestamp (internal precision: nanoseconds).
 ///
 /// The internal representation is intentionally not exposed so that
 /// downstream modules cannot construct arbitrary `Timestamp` values
@@ -22,7 +22,7 @@
 #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
 pub struct Timestamp(u64);
 
-/// A duration of time (internal precision: microseconds).
+/// A duration of time (internal precision: nanoseconds).
 ///
 /// Kept opaque for the same reason as `Timestamp`.
 #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
@@ -36,7 +36,7 @@ pub struct Duration(u64);
 /// # Notes
 /// This is a skeleton implementation (`todo!()`). The real
 /// implementation will call the OS time API and return a `Timestamp`
-/// wrapping the microseconds since the Unix epoch.
+/// wrapping the nanoseconds since the Unix epoch.
 pub fn now() -> Timestamp {
     todo!("time.clock::now: real implementation pending")
 }
