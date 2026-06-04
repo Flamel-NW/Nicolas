@@ -1,0 +1,66 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "user.store",
+  "source": "src/user/store.rs",
+  "imports": [
+    "user.types"
+  ],
+  "provides": {
+    "types": [],
+    "functions": [
+      {
+        "name": "load_profile",
+        "signature": "pub fn load_profile(id: UserId) -> Option",
+        "visibility": "pub",
+        "effects": [
+          "db.read"
+        ]
+      },
+      {
+        "name": "save_profile",
+        "signature": "pub fn save_profile(profile: UserProfile) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "db.write"
+        ]
+      },
+      {
+        "name": "mark_deactivated",
+        "signature": "pub fn mark_deactivated(id: UserId) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "db.read",
+          "db.write"
+        ]
+      }
+    ]
+  },
+  "effects": [
+    "db.read",
+    "db.write"
+  ],
+  "examples": [
+    {
+      "id": "load_existing",
+      "path": "examples/user_store_load_existing.rs"
+    },
+    {
+      "id": "save_new_profile",
+      "path": "examples/user_store_save_new_profile.rs"
+    }
+  ],
+  "intent": "提供用户档案的持久化读写边界。user.store 是整个场景中唯一直接操作持久化存储的模块，集中承载 db.read 和 db.write effects。上层模块（如 user.profile_service）通过 import user.store 使用持久化操作，不得绕过此边界直接访问存储层。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from store.nico; not a full compiler output. Experiment results must note this limitation."
+}

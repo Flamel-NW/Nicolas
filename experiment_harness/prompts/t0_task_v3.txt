@@ -1,0 +1,9 @@
+Task: Update the precision documentation in the time.clock module.
+
+The module currently describes its internal precision as "microseconds" (微秒) in several places. Change every occurrence to "nanoseconds" (纳秒).
+
+Requirements:
+- Change ONLY documentation text and comments. Do not alter any function signatures, struct definitions, logic, or implementation code.
+- Find and update ALL occurrences.
+
+Output: Provide the complete updated file with all changes applied.

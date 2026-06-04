@@ -1,0 +1,63 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "user.profile_service",
+  "source": "src/user/profile_service.rs",
+  "imports": [
+    "user.types",
+    "cache.kv",
+    "user.store"
+  ],
+  "provides": {
+    "types": [],
+    "functions": [
+      {
+        "name": "get_profile",
+        "signature": "pub fn get_profile(id: UserId) -> Option",
+        "visibility": "pub",
+        "effects": [
+          "reads_clock",
+          "db.read"
+        ]
+      },
+      {
+        "name": "update_profile",
+        "signature": "pub fn update_profile(profile: UserProfile) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "reads_clock",
+          "db.read",
+          "db.write"
+        ]
+      }
+    ]
+  },
+  "effects": [
+    "reads_clock",
+    "db.read",
+    "db.write"
+  ],
+  "examples": [
+    {
+      "id": "get_existing_profile",
+      "path": "examples/user_profile_service_get_existing_profile.rs"
+    },
+    {
+      "id": "update_and_get",
+      "path": "examples/user_profile_service_update_and_get.rs"
+    }
+  ],
+  "intent": "组合 cache.kv、user.store 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from profile_service.nico; not a full compiler output. Experiment results must note this limitation."
+}

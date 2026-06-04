@@ -1,0 +1,13 @@
+Task: Analyze the external side effects of the `get_profile` function in the user.profile_service module.
+
+Without modifying any code, answer the following questions:
+
+1. What external resources or systems does `get_profile` access — either directly or through functions it calls (transitively)?
+   For each external access, provide:
+   a. What kind of resource or system is accessed.
+   b. The full call chain from `get_profile` down to the point where the access occurs.
+   c. Which module is the direct interface to that external resource.
+
+2. Are there any external accesses that belong to `update_profile` but NOT to `get_profile`? List them separately and briefly explain why they do not apply to `get_profile`.
+
+Be precise. Do not include inferred or assumed behavior.

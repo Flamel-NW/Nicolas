@@ -1,0 +1,13 @@
+Task: Analyze the external side effects of the `get_profile` function.
+
+Without modifying any code, answer the following questions using only the provided source materials:
+
+1. What external resources or systems does `get_profile` access — either directly or through functions it calls (transitively)?
+   For each external access, provide:
+   a. What kind of resource or system is accessed (e.g., clock, database, network, filesystem).
+   b. The full call chain from `get_profile` down to the point where the access occurs.
+   c. Which module (file) is the direct interface to that external resource.
+
+2. Are there any external accesses that belong to `update_profile` but NOT to `get_profile`? List them separately and briefly explain why they do not apply to `get_profile`.
+
+Be precise. Do not include inferred or assumed behavior — base your answer strictly on what is visible in the provided materials.

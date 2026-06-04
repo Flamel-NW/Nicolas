@@ -1,0 +1,73 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "cache.kv",
+  "source": "src/cache/kv.rs",
+  "imports": [
+    "time.clock"
+  ],
+  "provides": {
+    "types": [
+      {
+        "name": "CacheKey",
+        "visibility": "pub",
+        "repr": "opaque"
+      },
+      {
+        "name": "CacheTtl",
+        "visibility": "pub",
+        "repr": "opaque"
+      }
+    ],
+    "functions": [
+      {
+        "name": "get",
+        "signature": "pub fn get(key: CacheKey) -> Option",
+        "visibility": "pub",
+        "effects": [
+          "reads_clock"
+        ]
+      },
+      {
+        "name": "set",
+        "signature": "pub fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "reads_clock"
+        ]
+      },
+      {
+        "name": "delete",
+        "signature": "pub fn delete(key: CacheKey) -> ()",
+        "visibility": "pub",
+        "effects": []
+      }
+    ]
+  },
+  "effects": [
+    "reads_clock"
+  ],
+  "examples": [
+    {
+      "id": "set_and_get",
+      "path": "examples/cache_kv_set_and_get.rs"
+    },
+    {
+      "id": "expired_entry_returns_none",
+      "path": "examples/cache_kv_expired_entry_returns_none.rs"
+    }
+  ],
+  "intent": "提供带 TTL 支持的通用 key-value cache 边界。通过 time.clock 集中处理 cache expiration 的时间读取，避免其他模块隐式读取时钟。get 在返回值前检查 TTL 是否过期，set 记录写入时刻以计算过期时间。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from kv.nico; not a full compiler output. Experiment results must note this limitation."
+}
