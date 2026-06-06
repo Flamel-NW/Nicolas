@@ -121,11 +121,11 @@ def load_system_prompt_v3(condition: str) -> str:
     prompt_file = PROMPTS_DIR / f"system_prompt_v3_{condition}.txt"
     system = load_text(prompt_file).strip()
     if condition == "C" and "{{NICOLAS_MANUAL}}" in system:
-        manual_path = MATERIALS_DIR / "nicolas_llm_manual_v1.md"
+        manual_path = MATERIALS_DIR / "nicolas_llm_manual_v2.md"
         if not manual_path.exists():
             raise FileNotFoundError(
                 f"Nicolas LLM Manual not found: {manual_path}\n"
-                "Run build_db.py first to generate it."
+                "Run build_db.py first to ensure materials are up to date."
             )
         manual = load_text(manual_path).strip()
         system = system.replace("{{NICOLAS_MANUAL}}", manual)
@@ -179,8 +179,12 @@ def get_tools(condition: str) -> list[dict]:
         "name": "run_sql",
         "description": (
             "Execute a SELECT query against the Nicolas Semantic DB (SQLite). "
-            "Tables: modules, imports, types, functions, effects, examples. "
-            "Only SELECT statements are allowed."
+            "Two schemas are available via prefixes: "
+            "trusted.* (machine-derived structural facts — authoritative, no cross-verification needed): "
+            "trusted.modules, trusted.imports, trusted.types, trusted.functions, "
+            "trusted.effects, trusted.examples, trusted.propagated_effects. "
+            "soft.* (LLM-authored semantic content): soft.module_intent. "
+            "All tables join on module_name. Only SELECT statements are allowed."
         ),
         "input_schema": {
             "type": "object",
@@ -276,16 +280,21 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
 
 
 def _run_sql(query: str) -> str:
-    """Execute a SELECT query against the Semantic DB."""
+    """Execute a SELECT query against the Semantic DB (trusted + soft via ATTACH)."""
     if not query.upper().startswith("SELECT"):
         return "Error: only SELECT queries are allowed."
 
-    db_path = MATERIALS_DIR / "semantic.db"
-    if not db_path.exists():
-        return "Error: semantic.db not found. Run build_db.py first."
+    trusted_path = MATERIALS_DIR / "sem_trusted.db"
+    soft_path = MATERIALS_DIR / "sem_soft.db"
+    if not trusted_path.exists():
+        return "Error: sem_trusted.db not found. Run build_db.py first."
+    if not soft_path.exists():
+        return "Error: sem_soft.db not found. Run build_db.py first."
 
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(":memory:")
+        conn.execute(f"ATTACH DATABASE '{trusted_path}' AS trusted")
+        conn.execute(f"ATTACH DATABASE '{soft_path}' AS soft")
         conn.row_factory = sqlite3.Row
         cur = conn.execute(query)
         rows = cur.fetchall()
