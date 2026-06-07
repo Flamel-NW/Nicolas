@@ -1,0 +1,81 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "user.types",
+  "source": "src/user/types.rs",
+  "imports": [],
+  "provides": {
+    "types": [
+      {
+        "name": "UserId",
+        "visibility": "pub",
+        "repr": "opaque"
+      },
+      {
+        "name": "EmailAddress",
+        "visibility": "pub",
+        "repr": "opaque"
+      },
+      {
+        "name": "UserStatus",
+        "visibility": "pub",
+        "repr": "opaque"
+      },
+      {
+        "name": "UserProfile",
+        "visibility": "pub",
+        "repr": "opaque"
+      }
+    ],
+    "functions": [
+      {
+        "name": "new_user_id",
+        "signature": "pub fn new_user_id(raw: u64) -> UserId",
+        "visibility": "pub",
+        "effects": [],
+        "calls": []
+      },
+      {
+        "name": "new_email",
+        "signature": "pub fn new_email(raw: String) -> Result",
+        "visibility": "pub",
+        "effects": [],
+        "calls": []
+      },
+      {
+        "name": "new_profile",
+        "signature": "pub fn new_profile(id: UserId, email: EmailAddress, status: UserStatus) -> UserProfile",
+        "visibility": "pub",
+        "effects": [],
+        "calls": []
+      }
+    ]
+  },
+  "effects": [],
+  "propagated_effects": [],
+  "examples": [
+    {
+      "id": "create_profile",
+      "path": "examples/user_types_create_profile.rs"
+    },
+    {
+      "id": "reject_invalid_email",
+      "path": "examples/user_types_reject_invalid_email.rs"
+    }
+  ],
+  "intent": "提供用户域的核心值类型。所有类型均为纯值类型：无 IO、无时钟、无持久化副作用。其他模块通过 import user.types 使用这些类型，而非直接构造原始数据。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "provides.functions.calls": "hard",
+    "effects": "hard",
+    "propagated_effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from types.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
+}

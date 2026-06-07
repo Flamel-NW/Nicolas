@@ -202,6 +202,13 @@ def insert_module(
             (module_name, ex["id"], ex.get("path")),
         )
 
+    for pe in data.get("propagated_effects", []):
+        trusted.execute(
+            "INSERT INTO propagated_effects "
+            "(module_name, effect, source_module, depth) VALUES (?, ?, ?, ?)",
+            (module_name, pe["effect"], pe["source_module"], pe["depth"]),
+        )
+
 
 # ---------------------------------------------------------------------------
 # propagated_effects computation (BFS, minimum-depth dedup)
@@ -355,8 +362,12 @@ def main() -> None:
         insert_module(trusted, soft, data)
         print(f"    {json_path.name}  →  module={data['module']}")
 
-    print("\n  Computing propagated_effects...")
-    compute_propagated_effects(trusted)
+    pe_count = trusted.execute("SELECT COUNT(*) FROM propagated_effects").fetchone()[0]
+    if pe_count == 0:
+        print("\n  Computing propagated_effects (BFS fallback — not in JSON)...")
+        compute_propagated_effects(trusted)
+    else:
+        print(f"\n  propagated_effects: read from JSON ({pe_count} rows already inserted).")
 
     trusted.commit()
     soft.commit()

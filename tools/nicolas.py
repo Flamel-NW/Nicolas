@@ -14,6 +14,7 @@ import sys
 import re
 import json
 import subprocess
+from collections import deque
 from pathlib import Path
 
 
@@ -170,6 +171,130 @@ def cmd_build(nico_path: Path) -> None:
     sys.exit(result.returncode)
 
 
+# ─── propagated_effects BFS ───────────────────────────────────────────────────
+
+def compute_propagated_effects_for_module(module_name: str, project_root: Path) -> list:
+    """BFS over the import graph to compute propagated_effects for one module.
+
+    Mirrors the algorithm in build_db.py but reads directly from .nico files,
+    so it can be called at nicolas-json time without a DB.
+
+    Returns a list of {effect, source_module, depth} dicts, deduplicated at
+    minimum depth per effect, sorted by (depth, source_module, effect).
+    """
+    def module_data(mod: str):
+        p = project_root / ('src/' + '/'.join(mod.split('.')) + '.nico')
+        if not p.exists():
+            return [], []
+        parsed = parse_nico(p.read_text(encoding='utf-8'))
+        return parsed['module_effects'], parsed['imports_list']
+
+    best: dict = {}        # effect -> (effect, source_module, depth)
+    visited_at: dict = {}  # dep -> minimum depth visited
+    queue: deque = deque()
+
+    _, direct_imports = module_data(module_name)
+    for dep in direct_imports:
+        queue.append((dep, 1))
+
+    while queue:
+        dep, depth = queue.popleft()
+        if dep == module_name or visited_at.get(dep, 999) <= depth:
+            continue
+        visited_at[dep] = depth
+        effects, sub_imports = module_data(dep)
+        for eff in effects:
+            if best.get(eff, (None, None, 999))[2] > depth:
+                best[eff] = (eff, dep, depth)
+        for sub_dep in sub_imports:
+            queue.append((sub_dep, depth + 1))
+
+    return sorted(
+        [{"effect": e, "source_module": s, "depth": d} for e, s, d in best.values()],
+        key=lambda x: (x['depth'], x['source_module'], x['effect']),
+    )
+
+
+# ─── nicolas-extract integration ─────────────────────────────────────────────
+
+def run_extract(rs_path: Path, project_root: Path) -> dict | None:
+    """Run nicolas-extract on a .rs file and return parsed JSON, or None on error."""
+    binary = project_root / "tools" / "nicolas_extract" / "target" / "debug" / "nicolas-extract"
+    if binary.exists():
+        cmd = [str(binary), str(rs_path)]
+    else:
+        manifest = project_root / "tools" / "nicolas_extract" / "Cargo.toml"
+        if not manifest.exists():
+            return None
+        cmd = ["cargo", "run", "--quiet", "--manifest-path", str(manifest), "--", str(rs_path)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return json.loads(r.stdout)
+    except Exception:
+        return None
+
+
+def build_alias_module_map(uses: list, module_name: str) -> dict:
+    """Return {alias -> nicolas_module_name} for module-level aliases only.
+
+    Skips PascalCase and ALLCAPS aliases (types / constants). Resolves
+    `crate::` and `super::` prefixes; ignores `std::` and `core::`.
+    """
+    parts = module_name.split('.')
+    parent_ns = '.'.join(parts[:-1]) if len(parts) > 1 else ''
+
+    alias_map: dict[str, str] = {}
+    for entry in uses:
+        alias = entry['alias']
+        path  = entry['path']
+
+        # Skip type / constant aliases (PascalCase or ALLCAPS)
+        if not alias or alias[0].isupper():
+            continue
+
+        if path.startswith('crate::'):
+            nico_module = path[len('crate::'):].replace('::', '.')
+        elif path.startswith('super::'):
+            rest = path[len('super::'):]
+            mod_component = rest.split('::')[0]
+            nico_module = f"{parent_ns}.{mod_component}" if parent_ns else mod_component
+        else:
+            continue  # std::, core::, or other non-Nicolas path
+
+        alias_map[alias] = nico_module
+
+    return alias_map
+
+
+def derive_calls(extract_functions: list, alias_map: dict) -> dict:
+    """Return {fn_name -> [{callee_module, callee_fn}]} from nicolas-extract output.
+
+    Only path-kind calls whose head is a known Nicolas module alias are kept.
+    Method and macro calls are ignored.
+    Duplicate (callee_module, callee_fn) pairs within one function are deduplicated
+    while preserving first-seen order.
+    """
+    result: dict[str, list] = {}
+    for fn in extract_functions:
+        fn_calls: list[dict] = []
+        seen: set[tuple] = set()
+        for call in fn.get('calls', []):
+            if call.get('kind') != 'path':
+                continue
+            head = call.get('head', '')
+            if head not in alias_map:
+                continue
+            callee_module = alias_map[head]
+            path_parts = call['path'].split('::')
+            callee_fn = path_parts[-1] if len(path_parts) > 1 else path_parts[0]
+            key = (callee_module, callee_fn)
+            if key not in seen:
+                seen.add(key)
+                fn_calls.append({'callee_module': callee_module, 'callee_fn': callee_fn})
+        result[fn['name']] = fn_calls
+    return result
+
+
 # ─── Shared .nico parser ──────────────────────────────────────────────────────
 
 def parse_nico(text: str) -> dict:
@@ -252,6 +377,22 @@ def cmd_json(nico_path: Path) -> None:
     if not p["module_name"]:
         sys.exit(f"Error: cannot find 'module X.Y {{' in {nico_path}")
 
+    # ── Derive calls from Rust AST via nicolas-extract ──────────────────────
+    project_root = find_project_root(nico_path.parent)
+    rs_path = project_root / p['source']
+    fn_calls_map: dict = {}
+    if rs_path.exists():
+        extract_data = run_extract(rs_path, project_root)
+        if extract_data:
+            alias_map    = build_alias_module_map(extract_data.get('uses', []), p['module_name'])
+            fn_calls_map = derive_calls(extract_data.get('functions', []), alias_map)
+
+    for fn in p['functions']:
+        fn['calls'] = fn_calls_map.get(fn['name'], [])
+
+    # ── Compute propagated_effects via BFS over .nico import graph ───────────
+    propagated_effects = compute_propagated_effects_for_module(p['module_name'], project_root)
+
     output = {
         "schema_version": "0.1.0-draft",
         "module":   p["module_name"],
@@ -261,23 +402,28 @@ def cmd_json(nico_path: Path) -> None:
             "types":     p["types"],
             "functions": p["functions"],
         },
-        "effects":  p["module_effects"],
+        "effects":            p["module_effects"],
+        "propagated_effects": propagated_effects,
         "examples": p["examples_list"],
         "intent":   p["intent"],
         "field_levels": {
-            "schema_version":     "hard",
-            "module":             "hard",
-            "source":             "hard",
-            "imports":            "hard",
-            "provides":           "hard",
-            "provides.types":     "hard",
-            "provides.functions": "hard",
-            "effects":            "hard",
-            "examples":           "hard",
-            "intent":             "advisory",
+            "schema_version":           "hard",
+            "module":                   "hard",
+            "source":                   "hard",
+            "imports":                  "hard",
+            "provides":                 "hard",
+            "provides.types":           "hard",
+            "provides.functions":       "hard",
+            "provides.functions.calls": "hard",
+            "effects":                  "hard",
+            "propagated_effects":       "hard",
+            "examples":                 "hard",
+            "intent":                   "advisory",
         },
         "generation_note": (
             f"nicolas json v0 — extracted from {nico_path.name}; "
+            "provides.functions[].calls derived from Rust-AST via nicolas-extract; "
+            "propagated_effects derived from import graph BFS over .nico files. "
             "not a full compiler output. Experiment results must note this limitation."
         ),
     }

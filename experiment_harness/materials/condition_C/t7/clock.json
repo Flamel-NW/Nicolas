@@ -23,13 +23,15 @@
         "visibility": "pub",
         "effects": [
           "reads_clock"
-        ]
+        ],
+        "calls": []
       }
     ]
   },
   "effects": [
     "reads_clock"
   ],
+  "propagated_effects": [],
   "examples": [
     {
       "id": "basic",
@@ -45,9 +47,11 @@
     "provides": "hard",
     "provides.types": "hard",
     "provides.functions": "hard",
+    "provides.functions.calls": "hard",
     "effects": "hard",
+    "propagated_effects": "hard",
     "examples": "hard",
     "intent": "advisory"
   },
-  "generation_note": "nicolas json v0 — extracted from clock.nico; not a full compiler output. Experiment results must note this limitation."
+  "generation_note": "nicolas json v0 — extracted from clock.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
 }

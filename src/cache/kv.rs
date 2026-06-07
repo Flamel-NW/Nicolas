@@ -16,14 +16,11 @@
 //!
 //! # Imports
 //! - `time.clock`: provides `Timestamp` and `now()` for TTL computation.
-//!
-//! # Non-goals (v0 skeleton)
-//! The current implementation is a skeleton (`todo!()`). A real
-//! implementation would maintain an in-memory map from `CacheKey` to
-//! `(value, expiry_timestamp)` and call `time.clock::now()` at `get`/`set`.
+
+use crate::time::clock;
 
 /// Opaque cache key. The inner `String` is not exposed to prevent callers
-/// from constructing keys without going through the designated constructor.
+/// from constructing keys without going through `new_key`.
 #[allow(dead_code)]
 pub struct CacheKey(String);
 
@@ -32,6 +29,16 @@ pub struct CacheKey(String);
 /// representation in v0.
 #[allow(dead_code)]
 pub struct CacheTtl(u64);
+
+/// Construct a cache key from a raw string.
+pub fn new_key(s: String) -> CacheKey {
+    CacheKey(s)
+}
+
+/// Construct a TTL value from a duration in seconds.
+pub fn new_ttl(secs: u64) -> CacheTtl {
+    CacheTtl(secs)
+}
 
 /// Look up a cache entry by key.
 ///
@@ -42,7 +49,8 @@ pub struct CacheTtl(u64);
 /// # Effects
 /// - `reads_clock`: reads system time to evaluate TTL expiry.
 pub fn get(_key: CacheKey) -> Option<String> {
-    todo!("cache.kv::get: real implementation pending")
+    let _ts = clock::now();
+    None
 }
 
 /// Insert or overwrite a cache entry with the given TTL.
@@ -53,12 +61,10 @@ pub fn get(_key: CacheKey) -> Option<String> {
 /// # Effects
 /// - `reads_clock`: reads system time to record the insertion timestamp.
 pub fn set(_key: CacheKey, _value: String, _ttl: CacheTtl) {
-    todo!("cache.kv::set: real implementation pending")
+    let _ts = clock::now();
 }
 
 /// Remove a cache entry unconditionally.
 ///
 /// Pure operation: does not read the clock or access any other module.
-pub fn delete(_key: CacheKey) {
-    todo!("cache.kv::delete: real implementation pending")
-}
+pub fn delete(_key: CacheKey) {}

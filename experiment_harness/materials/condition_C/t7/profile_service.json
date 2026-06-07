@@ -19,8 +19,18 @@
           "db.read"
         ],
         "calls": [
-          {"callee_module": "cache.kv", "callee_fn": "get"},
-          {"callee_module": "user.store", "callee_fn": "load_profile"}
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "new_key"
+          },
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "get"
+          },
+          {
+            "callee_module": "user.store",
+            "callee_fn": "load_profile"
+          }
         ]
       },
       {
@@ -33,8 +43,22 @@
           "db.write"
         ],
         "calls": [
-          {"callee_module": "cache.kv", "callee_fn": "set"},
-          {"callee_module": "user.store", "callee_fn": "save_profile"}
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "new_key"
+          },
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "new_ttl"
+          },
+          {
+            "callee_module": "user.store",
+            "callee_fn": "save_profile"
+          },
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "set"
+          }
         ]
       }
     ]
@@ -43,6 +67,23 @@
     "reads_clock",
     "db.read",
     "db.write"
+  ],
+  "propagated_effects": [
+    {
+      "effect": "reads_clock",
+      "source_module": "cache.kv",
+      "depth": 1
+    },
+    {
+      "effect": "db.read",
+      "source_module": "user.store",
+      "depth": 1
+    },
+    {
+      "effect": "db.write",
+      "source_module": "user.store",
+      "depth": 1
+    }
   ],
   "examples": [
     {
@@ -65,8 +106,9 @@
     "provides.functions": "hard",
     "provides.functions.calls": "hard",
     "effects": "hard",
+    "propagated_effects": "hard",
     "examples": "hard",
     "intent": "advisory"
   },
-  "generation_note": "nicolas json v0 — extracted from profile_service.nico; not a full compiler output. provides.functions[].calls derived from spec interface documentation (Rust-AST derivation is T2 work). Experiment results must note this limitation."
+  "generation_note": "nicolas json v0 — extracted from profile_service.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
 }

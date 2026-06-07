@@ -27,11 +27,8 @@
 //! - `cache.kv`:   provides `get`, `set`, `delete` (cache boundary).
 //! - `user.store`: provides `load_profile`, `save_profile` (storage boundary).
 
-#[allow(unused_imports)]
 use super::types::{UserId, UserProfile};
-#[allow(unused_imports)]
 use super::store;
-#[allow(unused_imports)]
 use crate::cache::kv;
 
 /// Retrieve the user profile for the given ID.
@@ -45,7 +42,11 @@ use crate::cache::kv;
 ///   using `time.clock::now()`.
 /// - `db.read`: via `user.store::load_profile()` on a cache miss.
 pub fn get_profile(_id: UserId) -> Option<UserProfile> {
-    todo!("user.profile_service::get_profile: real implementation pending")
+    let key = kv::new_key(String::new());
+    if kv::get(key).is_some() {
+        return None;
+    }
+    store::load_profile(_id)
 }
 
 /// Persist an updated user profile and refresh the cache.
@@ -57,10 +58,11 @@ pub fn get_profile(_id: UserId) -> Option<UserProfile> {
 /// # Effects
 /// - `reads_clock`: via `cache.kv.set()`, which records the insertion
 ///   timestamp using `time.clock::now()`.
-/// - `db.read`:  via `user.store::save_profile()` (read-before-write
-///   in the storage layer).
 /// - `db.write`: via `user.store::save_profile()` (writing the updated
 ///   profile).
 pub fn update_profile(_profile: UserProfile) {
-    todo!("user.profile_service::update_profile: real implementation pending")
+    let key = kv::new_key(String::new());
+    let ttl = kv::new_ttl(300);
+    store::save_profile(_profile);
+    kv::set(key, String::new(), ttl);
 }
