@@ -1,0 +1,22 @@
+[package]
+name = "nicolas-extract"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-AST extractor for Nicolas toolchain (T2.1.1). Extracts calls/uses/types from .rs files via syn."
+
+# Not referenced by root Cargo.toml — keeps root dependency tree clean.
+# Build:  cargo build --manifest-path tools/nicolas_extract/Cargo.toml
+# Test:   cargo test  --manifest-path tools/nicolas_extract/Cargo.toml
+
+[lib]
+name = "nicolas_extract"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nicolas-extract"
+path = "src/main.rs"
+
+[dependencies]
+syn  = { version = "2", features = ["full", "visit"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"

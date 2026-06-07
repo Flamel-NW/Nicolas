@@ -1,0 +1,37 @@
+{
+  "schema": "nicolas-extract/0.1",
+  "uses": [
+    {
+      "alias": "clock",
+      "path": "crate::time::clock",
+      "glob": false
+    }
+  ],
+  "functions": [
+    {
+      "name": "delete",
+      "visibility": "pub",
+      "calls": [
+        {"path": "todo", "head": "todo", "kind": "macro"}
+      ]
+    },
+    {
+      "name": "get",
+      "visibility": "pub",
+      "calls": [
+        {"path": "clock::now", "head": "clock", "kind": "path"}
+      ]
+    },
+    {
+      "name": "set",
+      "visibility": "pub",
+      "calls": [
+        {"path": "clock::now", "head": "clock", "kind": "path"}
+      ]
+    }
+  ],
+  "types": [
+    {"name": "CacheKey", "form": "newtype"},
+    {"name": "CacheTtl", "form": "newtype"}
+  ]
+}

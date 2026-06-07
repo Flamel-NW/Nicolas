@@ -1,0 +1,32 @@
+{
+  "schema": "nicolas-extract/0.1",
+  "uses": [
+    {
+      "alias": "SystemTime",
+      "path": "std::time::SystemTime",
+      "glob": false
+    },
+    {
+      "alias": "UNIX_EPOCH",
+      "path": "std::time::UNIX_EPOCH",
+      "glob": false
+    }
+  ],
+  "functions": [
+    {
+      "name": "now",
+      "visibility": "pub",
+      "calls": [
+        {"path": "as_secs",          "head": "as_secs",      "kind": "method"},
+        {"path": "expect",           "head": "expect",        "kind": "method"},
+        {"path": "duration_since",   "head": "duration_since","kind": "method"},
+        {"path": "SystemTime::now",  "head": "SystemTime",    "kind": "path"},
+        {"path": "Timestamp",        "head": "Timestamp",     "kind": "path"}
+      ]
+    }
+  ],
+  "types": [
+    {"name": "Duration",  "form": "newtype"},
+    {"name": "Timestamp", "form": "newtype"}
+  ]
+}
