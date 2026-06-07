@@ -41,7 +41,7 @@ MATERIALS_DIR = HARNESS_DIR / "materials"
 TRUSTED_DB_PATH = MATERIALS_DIR / "sem_trusted.db"
 SOFT_DB_PATH = MATERIALS_DIR / "sem_soft.db"
 JSON_DIR = MATERIALS_DIR / "condition_C" / "t7"
-MANUAL_PATH = MATERIALS_DIR / "nicolas_llm_manual_v2.md"
+MANUAL_PATH = MATERIALS_DIR / "nicolas_llm_manual_v3.md"
 MANUAL_TOKENS_PATH = MATERIALS_DIR / "manual_tokens.json"
 MODEL = "claude-sonnet-4-5"
 
@@ -112,6 +112,14 @@ CREATE TABLE IF NOT EXISTS propagated_effects (
     source_module TEXT NOT NULL,
     depth         INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS call_graph (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    caller_module TEXT NOT NULL,
+    caller_fn     TEXT NOT NULL,
+    callee_module TEXT NOT NULL,
+    callee_fn     TEXT NOT NULL
+);
 """
 
 SOFT_SCHEMA = """
@@ -175,6 +183,11 @@ def insert_module(
             trusted.execute(
                 "INSERT INTO effects (module_name, function_name, effect, scope) VALUES (?, ?, ?, 'function')",
                 (module_name, fn["name"], eff),
+            )
+        for call in fn.get("calls", []):
+            trusted.execute(
+                "INSERT INTO call_graph (caller_module, caller_fn, callee_module, callee_fn) VALUES (?, ?, ?, ?)",
+                (module_name, fn["name"], call["callee_module"], call["callee_fn"]),
             )
 
     for eff in data.get("effects", []):
@@ -350,7 +363,7 @@ def main() -> None:
 
     # Row counts
     print("\n  sem_trusted.db row counts:")
-    for table in ["modules", "imports", "types", "functions", "effects", "examples", "propagated_effects"]:
+    for table in ["modules", "imports", "types", "functions", "effects", "examples", "propagated_effects", "call_graph"]:
         count = trusted.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         print(f"    {table:25s}: {count} rows")
 
@@ -382,6 +395,14 @@ def main() -> None:
     ).fetchall()
     for row in rows:
         print(f"    {row[0]:35s} ← {row[2]} (depth={row[3]}) : {row[1]}")
+
+    print("\n  [Validation] call_graph (all edges):")
+    rows = trusted.execute(
+        "SELECT caller_module, caller_fn, callee_module, callee_fn FROM call_graph "
+        "ORDER BY caller_module, caller_fn, callee_module, callee_fn"
+    ).fetchall()
+    for row in rows:
+        print(f"    {row[0]}.{row[1]:30s} → {row[2]}.{row[3]}")
 
     trusted.close()
     soft.close()

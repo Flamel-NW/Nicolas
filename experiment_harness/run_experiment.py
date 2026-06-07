@@ -40,7 +40,7 @@ RESULTS_DIR = HARNESS_DIR / "results"
 NICOLAS_ROOT = HARNESS_DIR.parent   # Nicolas/ repo root
 
 VALID_TASKS = ("T0", "T7")
-VALID_CONDITIONS = ("A", "C")
+VALID_CONDITIONS = ("A", "C", "D")
 
 # ---------------------------------------------------------------------------
 # Load .env (search from harness dir upward; finds workspace root .env)
@@ -120,23 +120,27 @@ def load_system_prompt_v3(condition: str) -> str:
     """
     prompt_file = PROMPTS_DIR / f"system_prompt_v3_{condition}.txt"
     system = load_text(prompt_file).strip()
-    if condition == "C" and "{{NICOLAS_MANUAL}}" in system:
-        manual_path = MATERIALS_DIR / "nicolas_llm_manual_v2.md"
+    if condition in ("C", "D") and "{{NICOLAS_MANUAL}}" in system:
+        manual_file = "nicolas_llm_manual_D.md" if condition == "D" else "nicolas_llm_manual_v3.md"
+        manual_path = MATERIALS_DIR / manual_file
         if not manual_path.exists():
             raise FileNotFoundError(
                 f"Nicolas LLM Manual not found: {manual_path}\n"
-                "Run build_db.py first to ensure materials are up to date."
+                "Run build_db.py / parse_condition_d.py first to ensure materials are up to date."
             )
         manual = load_text(manual_path).strip()
         system = system.replace("{{NICOLAS_MANUAL}}", manual)
     return system
 
 
-def load_manual_tokens() -> int:
-    """Load per-turn manual token count computed by build_db.py.
+def load_manual_tokens(condition: str = "C") -> int:
+    """Load per-turn manual token count for the given condition.
+    Condition C: manual_tokens.json (written by build_db.py).
+    Condition D: manual_tokens_D.json (written by parse_condition_d.py).
     Returns 0 if the file is not found (safe fallback for condition A).
     """
-    token_file = MATERIALS_DIR / "manual_tokens.json"
+    token_file_name = "manual_tokens_D.json" if condition == "D" else "manual_tokens.json"
+    token_file = MATERIALS_DIR / token_file_name
     if not token_file.exists():
         return 0
     data = json.loads(token_file.read_text(encoding="utf-8"))
@@ -182,8 +186,48 @@ def get_tools(condition: str) -> list[dict]:
             "Two schemas are available via prefixes: "
             "trusted.* (machine-derived structural facts — authoritative, no cross-verification needed): "
             "trusted.modules, trusted.imports, trusted.types, trusted.functions, "
-            "trusted.effects, trusted.examples, trusted.propagated_effects. "
+            "trusted.effects, trusted.examples, trusted.propagated_effects, trusted.call_graph. "
+            "trusted.call_graph columns: caller_module, caller_fn, callee_module, callee_fn — "
+            "records every direct cross-module function call edge. "
             "soft.* (LLM-authored semantic content): soft.module_intent. "
+            "All tables join on module_name. Only SELECT statements are allowed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "A SELECT SQL query."}
+            },
+            "required": ["query"],
+        },
+    }
+
+    read_file_D = {
+        "name": "read_file",
+        "description": (
+            "Read a Rust source file by filename "
+            "(e.g. 'clock.rs', 'profile_service.rs', 'store.rs', 'kv.rs', 'types.rs'). "
+            "Only .rs files are accessible."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Filename or path of the .rs file to read."}
+            },
+            "required": ["path"],
+        },
+    }
+    run_sql_D = dict(run_sql)
+    run_sql_D = {
+        "name": "run_sql",
+        "description": (
+            "Execute a SELECT query against the Condition D Semantic DB (SQLite). "
+            "Two schemas are available via prefixes: "
+            "trusted.* (annotation-derived structural facts — authoritative, no cross-verification needed): "
+            "trusted.modules, trusted.imports, trusted.types, trusted.functions, "
+            "trusted.effects, trusted.examples, trusted.propagated_effects, trusted.call_graph. "
+            "trusted.call_graph columns: caller_module, caller_fn, callee_module, callee_fn — "
+            "records every direct cross-module function call edge from @nico-fn annotations. "
+            "soft.* (human-authored semantic content): soft.module_intent. "
             "All tables join on module_name. Only SELECT statements are allowed."
         ),
         "input_schema": {
@@ -199,6 +243,8 @@ def get_tools(condition: str) -> list[dict]:
         return [read_file_A]
     elif condition == "C":
         return [run_sql, read_file_C]
+    elif condition == "D":
+        return [run_sql_D, read_file_D]
     else:
         raise ValueError(f"Unknown condition: {condition}")
 
@@ -211,13 +257,18 @@ def execute_tool(tool_name: str, tool_input: dict, condition: str, task: str) ->
             return _read_file_condition_A(raw_path, task)
         elif condition == "C":
             return _read_file_condition_C(raw_path, task)
+        elif condition == "D":
+            return _read_file_condition_D(raw_path, task)
         else:
             return f"Error: unknown condition '{condition}'"
 
     elif tool_name == "run_sql":
-        if condition != "C":
+        if condition == "C":
+            return _run_sql(tool_input.get("query", "").strip())
+        elif condition == "D":
+            return _run_sql_condition_D(tool_input.get("query", "").strip())
+        else:
             return "Error: run_sql is not available in this condition."
-        return _run_sql(tool_input.get("query", "").strip())
 
     else:
         return f"Error: unknown tool '{tool_name}'"
@@ -290,6 +341,64 @@ def _run_sql(query: str) -> str:
         return "Error: sem_trusted.db not found. Run build_db.py first."
     if not soft_path.exists():
         return "Error: sem_soft.db not found. Run build_db.py first."
+
+    try:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(f"ATTACH DATABASE '{trusted_path}' AS trusted")
+        conn.execute(f"ATTACH DATABASE '{soft_path}' AS soft")
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(query)
+        rows = cur.fetchall()
+        conn.close()
+    except sqlite3.Error as e:
+        return f"SQL Error: {e}"
+
+    if not rows:
+        return "Query returned 0 rows."
+
+    headers = list(rows[0].keys())
+    col_widths = [max(len(h), max((len(str(r[h]) if r[h] is not None else "NULL") for r in rows), default=0))
+                  for h in headers]
+    sep = "-+-".join("-" * w for w in col_widths)
+    header_line = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
+
+    lines = [header_line, sep]
+    for row in rows:
+        lines.append(" | ".join(
+            (str(row[h]) if row[h] is not None else "NULL").ljust(w)
+            for h, w in zip(headers, col_widths)
+        ))
+    lines.append(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''} returned)")
+    return "\n".join(lines)
+
+
+def _read_file_condition_D(path: str, task: str) -> str:
+    """Serve .rs files from materials/condition_D/{task}/."""
+    basename = Path(path).name
+    if not basename.endswith(".rs"):
+        return f"Error: only .rs files are accessible in condition D (got '{basename}')"
+    file_path = MATERIALS_DIR / "condition_D" / task.lower() / basename
+    if not file_path.exists():
+        available = [f.name for f in (MATERIALS_DIR / "condition_D" / task.lower()).iterdir()
+                     if f.is_file()] if (MATERIALS_DIR / "condition_D" / task.lower()).exists() else []
+        return (
+            f"Error: file not found: '{basename}'. "
+            f"Available files: {available}"
+        )
+    return load_text(file_path)
+
+
+def _run_sql_condition_D(query: str) -> str:
+    """Execute a SELECT query against the Condition D Semantic DB."""
+    if not query.upper().startswith("SELECT"):
+        return "Error: only SELECT queries are allowed."
+
+    trusted_path = MATERIALS_DIR / "sem_d_trusted.db"
+    soft_path = MATERIALS_DIR / "sem_d_soft.db"
+    if not trusted_path.exists():
+        return "Error: sem_d_trusted.db not found. Run parse_condition_d.py first."
+    if not soft_path.exists():
+        return "Error: sem_d_soft.db not found. Run parse_condition_d.py first."
 
     try:
         conn = sqlite3.connect(":memory:")
@@ -414,9 +523,10 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
     #   For condition A (no manual), true_task_tokens ≈ last_turn_input (minimal system prompt).
 
     last_turn_input = per_turn_input_tokens[-1] if per_turn_input_tokens else 0
-    manual_overhead_total = manual_tokens_per_turn * turns if condition == "C" else 0
+    has_manual = condition in ("C", "D")
+    manual_overhead_total = manual_tokens_per_turn * turns if has_manual else 0
     task_input_tokens = total_input_tokens - manual_overhead_total
-    true_task_tokens = last_turn_input - manual_tokens_per_turn if condition == "C" else last_turn_input
+    true_task_tokens = last_turn_input - manual_tokens_per_turn if has_manual else last_turn_input
 
     print(
         f"done. total_input={total_input_tokens} last_turn_input={last_turn_input} "
@@ -528,11 +638,11 @@ def main():
             sys.exit(1)
         task_prompt = load_text(task_prompt_path).strip()
 
-        manual_tokens_per_turn = load_manual_tokens() if condition == "C" else 0
+        manual_tokens_per_turn = load_manual_tokens(condition) if condition in ("C", "D") else 0
 
         print(f"\nExperiment: task={task}  condition={condition}  runs={args.runs}  "
               f"model={model}  mode=tool_use")
-        if condition == "C":
+        if condition in ("C", "D"):
             print(f"Manual overhead: {manual_tokens_per_turn} tokens/turn")
 
         if args.dry_run:

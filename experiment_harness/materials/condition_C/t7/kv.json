@@ -25,6 +25,9 @@
         "visibility": "pub",
         "effects": [
           "reads_clock"
+        ],
+        "calls": [
+          {"callee_module": "time.clock", "callee_fn": "now"}
         ]
       },
       {
@@ -33,13 +36,17 @@
         "visibility": "pub",
         "effects": [
           "reads_clock"
+        ],
+        "calls": [
+          {"callee_module": "time.clock", "callee_fn": "now"}
         ]
       },
       {
         "name": "delete",
         "signature": "pub fn delete(key: CacheKey) -> ()",
         "visibility": "pub",
-        "effects": []
+        "effects": [],
+        "calls": []
       }
     ]
   },
@@ -65,9 +72,10 @@
     "provides": "hard",
     "provides.types": "hard",
     "provides.functions": "hard",
+    "provides.functions.calls": "hard",
     "effects": "hard",
     "examples": "hard",
     "intent": "advisory"
   },
-  "generation_note": "nicolas json v0 — extracted from kv.nico; not a full compiler output. Experiment results must note this limitation."
+  "generation_note": "nicolas json v0 — extracted from kv.nico; not a full compiler output. provides.functions[].calls derived from spec interface documentation (Rust-AST derivation is T2 work). Experiment results must note this limitation."
 }

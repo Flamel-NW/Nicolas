@@ -17,6 +17,10 @@
         "effects": [
           "reads_clock",
           "db.read"
+        ],
+        "calls": [
+          {"callee_module": "cache.kv", "callee_fn": "get"},
+          {"callee_module": "user.store", "callee_fn": "load_profile"}
         ]
       },
       {
@@ -27,6 +31,10 @@
           "reads_clock",
           "db.read",
           "db.write"
+        ],
+        "calls": [
+          {"callee_module": "cache.kv", "callee_fn": "set"},
+          {"callee_module": "user.store", "callee_fn": "save_profile"}
         ]
       }
     ]
@@ -55,9 +63,10 @@
     "provides": "hard",
     "provides.types": "hard",
     "provides.functions": "hard",
+    "provides.functions.calls": "hard",
     "effects": "hard",
     "examples": "hard",
     "intent": "advisory"
   },
-  "generation_note": "nicolas json v0 — extracted from profile_service.nico; not a full compiler output. Experiment results must note this limitation."
+  "generation_note": "nicolas json v0 — extracted from profile_service.nico; not a full compiler output. provides.functions[].calls derived from spec interface documentation (Rust-AST derivation is T2 work). Experiment results must note this limitation."
 }
