@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use syn::{
     visit::{self, Visit},
     Expr, ExprCall, ExprMethodCall, Fields, File, ItemEnum, ItemFn, ItemStruct,
-    ItemType, ItemUse, UseTree, Visibility,
+    ItemType, ItemUse, ReturnType, UseTree, Visibility,
 };
 
 // ─── Output schema ─────────────────────────────────────────────────────────
@@ -49,6 +49,10 @@ pub struct FnEntry {
     pub name: String,
     /// `"pub"` or `"private"`. `pub(crate)` etc. are `"private"` in this schema.
     pub visibility: String,
+    /// Full return type string (e.g. `"Option<String>"`, `"Timestamp"`).
+    /// Absent when the function returns `()` (no `->` in signature).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
     /// All call sites found in the function body, in source traversal order.
     pub calls: Vec<CallEntry>,
 }
@@ -132,6 +136,11 @@ impl<'ast> Visit<'ast> for FileVisitor {
         }
         .to_string();
 
+        let return_type = match &node.sig.output {
+            ReturnType::Default => None,
+            ReturnType::Type(_, ty) => Some(quote::quote!(#ty).to_string().replace(' ', "")),
+        };
+
         // Collect all call sites in the function body via a nested visitor.
         let mut collector = CallCollector { calls: Vec::new() };
         collector.visit_block(&node.block);
@@ -139,6 +148,7 @@ impl<'ast> Visit<'ast> for FileVisitor {
         self.functions.push(FnEntry {
             name,
             visibility,
+            return_type,
             calls: collector.calls,
         });
 

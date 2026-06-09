@@ -16,6 +16,7 @@
     {
       "name": "now",
       "visibility": "pub",
+      "return_type": "Timestamp",
       "calls": [
         {"path": "as_secs",          "head": "as_secs",      "kind": "method"},
         {"path": "expect",           "head": "expect",        "kind": "method"},

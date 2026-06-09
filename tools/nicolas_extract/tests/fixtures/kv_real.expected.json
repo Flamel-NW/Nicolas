@@ -18,6 +18,7 @@
     {
       "name": "get",
       "visibility": "pub",
+      "return_type": "Option<String>",
       "calls": [
         {"path": "clock::now", "head": "clock", "kind": "path"}
       ]

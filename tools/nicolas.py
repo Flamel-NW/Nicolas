@@ -329,11 +329,11 @@ def parse_nico(text: str) -> dict:
 
     # functions from interface (with per-function effects on the immediately following line)
     functions = []
-    fn_re = re.compile(r'fn\s+(\w+)\s*\(([^)]*)\)\s*->\s*(\w+|\(\))', re.MULTILINE)
+    fn_re = re.compile(r'fn\s+(\w+)\s*\(([^)]*)\)\s*->\s*([A-Za-z_][\w<>, ]*|\(\))', re.MULTILINE)
     for fn_m in fn_re.finditer(interface_block):
         name  = fn_m.group(1)
         args  = fn_m.group(2).strip()
-        ret   = fn_m.group(3)
+        ret   = fn_m.group(3).strip()
         sig   = f"pub fn {name}({args}) -> {ret}"
         after = interface_block[fn_m.end():]
         eff_m = re.match(r'[ \t]*\n[ \t]*effects\s+\[([^\]]+)\]', after)
@@ -343,6 +343,7 @@ def parse_nico(text: str) -> dict:
             "signature": sig,
             "visibility": "pub",
             "effects": fn_effects,
+            "return_type": ret,
         })
 
     # module-level effects (in spec, outside interface)
