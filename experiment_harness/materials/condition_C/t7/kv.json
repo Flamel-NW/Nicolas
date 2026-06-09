@@ -10,12 +10,12 @@
       {
         "name": "CacheKey",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       },
       {
         "name": "CacheTtl",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       }
     ],
     "functions": [
@@ -26,6 +26,7 @@
         "effects": [
           "reads_clock"
         ],
+        "return_type": "Option",
         "calls": [
           {
             "callee_module": "time.clock",
@@ -40,6 +41,7 @@
         "effects": [
           "reads_clock"
         ],
+        "return_type": "()",
         "calls": [
           {
             "callee_module": "time.clock",
@@ -52,6 +54,7 @@
         "signature": "pub fn delete(key: CacheKey) -> ()",
         "visibility": "pub",
         "effects": [],
+        "return_type": "()",
         "calls": []
       }
     ]

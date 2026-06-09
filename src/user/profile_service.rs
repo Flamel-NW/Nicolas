@@ -30,6 +30,7 @@
 use super::types::{UserId, UserProfile};
 use super::store;
 use crate::cache::kv;
+use crate::cache::kv::{CacheKey, CacheTtl};
 
 /// Retrieve the user profile for the given ID.
 ///
@@ -42,7 +43,7 @@ use crate::cache::kv;
 ///   using `time.clock::now()`.
 /// - `db.read`: via `user.store::load_profile()` on a cache miss.
 pub fn get_profile(_id: UserId) -> Option<UserProfile> {
-    let key = kv::new_key(String::new());
+    let key = CacheKey(String::new());
     if kv::get(key).is_some() {
         return None;
     }
@@ -61,8 +62,8 @@ pub fn get_profile(_id: UserId) -> Option<UserProfile> {
 /// - `db.write`: via `user.store::save_profile()` (writing the updated
 ///   profile).
 pub fn update_profile(_profile: UserProfile) {
-    let key = kv::new_key(String::new());
-    let ttl = kv::new_ttl(300);
+    let key = CacheKey(String::new());
+    let ttl = CacheTtl(300);
     store::save_profile(_profile);
     kv::set(key, String::new(), ttl);
 }

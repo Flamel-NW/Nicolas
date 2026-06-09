@@ -15,6 +15,7 @@
         "effects": [
           "db.read"
         ],
+        "return_type": "Option",
         "calls": []
       },
       {
@@ -24,6 +25,7 @@
         "effects": [
           "db.write"
         ],
+        "return_type": "()",
         "calls": []
       },
       {
@@ -34,6 +36,7 @@
           "db.read",
           "db.write"
         ],
+        "return_type": "()",
         "calls": []
       }
     ]

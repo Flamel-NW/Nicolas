@@ -18,11 +18,8 @@
           "reads_clock",
           "db.read"
         ],
+        "return_type": "Option",
         "calls": [
-          {
-            "callee_module": "cache.kv",
-            "callee_fn": "new_key"
-          },
           {
             "callee_module": "cache.kv",
             "callee_fn": "get"
@@ -42,15 +39,8 @@
           "db.read",
           "db.write"
         ],
+        "return_type": "()",
         "calls": [
-          {
-            "callee_module": "cache.kv",
-            "callee_fn": "new_key"
-          },
-          {
-            "callee_module": "cache.kv",
-            "callee_fn": "new_ttl"
-          },
           {
             "callee_module": "user.store",
             "callee_fn": "save_profile"

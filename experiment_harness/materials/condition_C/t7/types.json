@@ -8,22 +8,22 @@
       {
         "name": "UserId",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       },
       {
         "name": "EmailAddress",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       },
       {
         "name": "UserStatus",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "enum"
       },
       {
         "name": "UserProfile",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "struct"
       }
     ],
     "functions": [
@@ -32,13 +32,15 @@
         "signature": "pub fn new_user_id(raw: u64) -> UserId",
         "visibility": "pub",
         "effects": [],
+        "return_type": "UserId",
         "calls": []
       },
       {
         "name": "new_email",
-        "signature": "pub fn new_email(raw: String) -> Result",
+        "signature": "pub fn new_email(raw: String) -> Result<EmailAddress, String>",
         "visibility": "pub",
         "effects": [],
+        "return_type": "Result<EmailAddress, String>",
         "calls": []
       },
       {
@@ -46,6 +48,7 @@
         "signature": "pub fn new_profile(id: UserId, email: EmailAddress, status: UserStatus) -> UserProfile",
         "visibility": "pub",
         "effects": [],
+        "return_type": "UserProfile",
         "calls": []
       }
     ]

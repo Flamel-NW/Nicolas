@@ -8,12 +8,12 @@
       {
         "name": "Timestamp",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       },
       {
         "name": "Duration",
         "visibility": "pub",
-        "repr": "opaque"
+        "repr": "newtype"
       }
     ],
     "functions": [
@@ -24,6 +24,7 @@
         "effects": [
           "reads_clock"
         ],
+        "return_type": "Timestamp",
         "calls": []
       }
     ]

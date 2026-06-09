@@ -19,16 +19,15 @@
 
 use crate::time::clock;
 
-/// Opaque cache key. The inner `String` is not exposed to prevent callers
-/// from constructing keys without going through `new_key`.
+/// Opaque cache key wrapping a raw string identifier.
 #[allow(dead_code)]
-pub struct CacheKey(String);
+pub struct CacheKey(pub String);
 
 /// Opaque TTL duration in seconds. Kept distinct from `time.clock::Duration`
 /// to avoid coupling the cache interface to the clock module's internal
 /// representation in v0.
 #[allow(dead_code)]
-pub struct CacheTtl(u64);
+pub struct CacheTtl(pub u64);
 
 /// Construct a cache key from a raw string.
 pub fn new_key(s: String) -> CacheKey {

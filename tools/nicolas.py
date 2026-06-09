@@ -382,14 +382,18 @@ def cmd_json(nico_path: Path) -> None:
     project_root = find_project_root(nico_path.parent)
     rs_path = project_root / p['source']
     fn_calls_map: dict = {}
+    form_map: dict = {}
     if rs_path.exists():
         extract_data = run_extract(rs_path, project_root)
         if extract_data:
             alias_map    = build_alias_module_map(extract_data.get('uses', []), p['module_name'])
             fn_calls_map = derive_calls(extract_data.get('functions', []), alias_map)
+            form_map     = {t['name']: t['form'] for t in extract_data.get('types', [])}
 
     for fn in p['functions']:
         fn['calls'] = fn_calls_map.get(fn['name'], [])
+    for t in p['types']:
+        t['repr'] = form_map.get(t['name'], 'opaque')
 
     # ── Compute propagated_effects via BFS over .nico import graph ───────────
     propagated_effects = compute_propagated_effects_for_module(p['module_name'], project_root)
