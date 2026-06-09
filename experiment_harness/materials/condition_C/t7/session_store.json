@@ -1,0 +1,75 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "session.store",
+  "source": "src/session/store.rs",
+  "imports": [
+    "session.types"
+  ],
+  "provides": {
+    "types": [],
+    "functions": [
+      {
+        "name": "load_session",
+        "signature": "pub fn load_session(id: SessionId) -> Option",
+        "visibility": "pub",
+        "effects": [
+          "db.read"
+        ],
+        "return_type": "Option",
+        "calls": []
+      },
+      {
+        "name": "save_session",
+        "signature": "pub fn save_session(info: SessionInfo) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "db.write"
+        ],
+        "return_type": "()",
+        "calls": []
+      },
+      {
+        "name": "revoke_session",
+        "signature": "pub fn revoke_session(id: SessionId) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "db.read",
+          "db.write"
+        ],
+        "return_type": "()",
+        "calls": []
+      }
+    ]
+  },
+  "effects": [
+    "db.read",
+    "db.write"
+  ],
+  "propagated_effects": [],
+  "examples": [
+    {
+      "id": "load_existing_session",
+      "path": "examples/session_store_load_existing_session.rs"
+    },
+    {
+      "id": "save_new_session",
+      "path": "examples/session_store_save_new_session.rs"
+    }
+  ],
+  "intent": "提供 session 数据的持久化读写边界。session.store 是整个场景中唯一直接操作持久化存储的 session 模块，集中承载 db.read 和 db.write effects。上层模块通过 import session.store 使用持久化操作，不得绕过此边界直接访问存储层。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "provides.functions.calls": "hard",
+    "effects": "hard",
+    "propagated_effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from store.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
+}

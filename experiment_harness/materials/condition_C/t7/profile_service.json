@@ -5,7 +5,8 @@
   "imports": [
     "user.types",
     "cache.kv",
-    "user.store"
+    "user.store",
+    "audit.log"
   ],
   "provides": {
     "types": [],
@@ -16,7 +17,8 @@
         "visibility": "pub",
         "effects": [
           "reads_clock",
-          "db.read"
+          "db.read",
+          "audit.write"
         ],
         "return_type": "Option",
         "calls": [
@@ -27,6 +29,14 @@
           {
             "callee_module": "user.store",
             "callee_fn": "load_profile"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "new_event"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "record"
           }
         ]
       },
@@ -37,10 +47,15 @@
         "effects": [
           "reads_clock",
           "db.read",
-          "db.write"
+          "db.write",
+          "audit.write"
         ],
         "return_type": "()",
         "calls": [
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "new_event"
+          },
           {
             "callee_module": "user.store",
             "callee_fn": "save_profile"
@@ -48,6 +63,10 @@
           {
             "callee_module": "cache.kv",
             "callee_fn": "set"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "record"
           }
         ]
       }
@@ -56,9 +75,15 @@
   "effects": [
     "reads_clock",
     "db.read",
-    "db.write"
+    "db.write",
+    "audit.write"
   ],
   "propagated_effects": [
+    {
+      "effect": "audit.write",
+      "source_module": "audit.log",
+      "depth": 1
+    },
     {
       "effect": "reads_clock",
       "source_module": "cache.kv",
@@ -85,7 +110,7 @@
       "path": "examples/user_profile_service_update_and_get.rs"
     }
   ],
-  "intent": "组合 cache.kv、user.store 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。",
+  "intent": "组合 cache.kv、user.store、audit.log 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。每次 profile 操作均通过 audit.log 记录 audit event。",
   "field_levels": {
     "schema_version": "hard",
     "module": "hard",

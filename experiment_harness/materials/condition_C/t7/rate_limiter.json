@@ -1,0 +1,94 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "rate.limiter",
+  "source": "src/rate/limiter.rs",
+  "imports": [
+    "time.clock",
+    "metrics.recorder"
+  ],
+  "provides": {
+    "types": [
+      {
+        "name": "RateLimitKey",
+        "visibility": "pub",
+        "repr": "newtype"
+      }
+    ],
+    "functions": [
+      {
+        "name": "new_rate_limit_key",
+        "signature": "pub fn new_rate_limit_key(raw: String) -> RateLimitKey",
+        "visibility": "pub",
+        "effects": [],
+        "return_type": "RateLimitKey",
+        "calls": []
+      },
+      {
+        "name": "check_and_record",
+        "signature": "pub fn check_and_record(key: RateLimitKey) -> bool",
+        "visibility": "pub",
+        "effects": [
+          "reads_clock",
+          "metrics.write"
+        ],
+        "return_type": "bool",
+        "calls": [
+          {
+            "callee_module": "time.clock",
+            "callee_fn": "now"
+          },
+          {
+            "callee_module": "metrics.recorder",
+            "callee_fn": "new_metric_name"
+          },
+          {
+            "callee_module": "metrics.recorder",
+            "callee_fn": "record"
+          }
+        ]
+      }
+    ]
+  },
+  "effects": [
+    "reads_clock",
+    "metrics.write"
+  ],
+  "propagated_effects": [
+    {
+      "effect": "metrics.write",
+      "source_module": "metrics.recorder",
+      "depth": 1
+    },
+    {
+      "effect": "reads_clock",
+      "source_module": "time.clock",
+      "depth": 1
+    }
+  ],
+  "examples": [
+    {
+      "id": "allowed_request",
+      "path": "examples/rate_limiter_allowed_request.rs"
+    },
+    {
+      "id": "rate_limited_request",
+      "path": "examples/rate_limiter_rate_limited_request.rs"
+    }
+  ],
+  "intent": "提供请求限流的统一边界。通过 time.clock 获取当前时间以判断限流窗口，通过 metrics.recorder 记录请求指标，避免其他模块分散处理限流逻辑与指标上报。check_and_record 是唯一公开检查接口：在单次调用中同时完成限额检查与指标记录。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "provides.functions.calls": "hard",
+    "effects": "hard",
+    "propagated_effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from limiter.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
+}

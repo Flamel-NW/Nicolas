@@ -1,0 +1,109 @@
+module session.types {
+
+  spec {
+    intent "提供 session 域的核心值类型。所有类型均为纯值类型：无 IO、无时钟、无持久化副作用。其他模块通过 import session.types 使用这些类型，而非直接构造原始数据。"
+
+    imports [user.types]
+
+    interface {
+      type SessionId      // 不透明 session ID；内部表示：u64
+      type SessionToken   // 不透明 session token；内部表示：String
+      type SessionStatus  // 枚举：Active | Expired | Revoked
+      type SessionInfo    // 聚合类型：{ id: SessionId, user_id: UserId, token: SessionToken, status: SessionStatus }
+
+      // 构造函数
+      fn new_session_id(raw: u64) -> SessionId
+      fn new_session_token(raw: String) -> SessionToken
+        // v0 skeleton：不做格式检查，直接封装
+      fn new_session_info(id: SessionId, user_id: UserId, token: SessionToken, status: SessionStatus) -> SessionInfo
+    }
+
+    // 无 effects：所有函数均为纯计算，不读取外部状态
+  }
+
+  checks {
+    examples {
+      example create_session_info {
+        // 验证完整 SessionInfo 构造路径：
+        //   1. 构造 SessionId
+        //   2. 获取 UserId（from user.types）
+        //   3. 构造 SessionToken
+        //   4. 组合为 SessionInfo
+        // 对应 examples/session_types_create_session_info.rs
+        let id     = session.types.new_session_id(42);
+        let uid    = user.types.new_user_id(7);
+        let token  = session.types.new_session_token("tok-abc123");
+        let info   = session.types.new_session_info(id, uid, token, SessionStatus::Active);
+        assert typeof(info) == SessionInfo;
+      }
+
+      example revoked_session_status {
+        // 验证：状态可以设置为 Revoked
+        // 对应 examples/session_types_revoked_session_status.rs
+        let id    = session.types.new_session_id(99);
+        let uid   = user.types.new_user_id(3);
+        let token = session.types.new_session_token("tok-revoked");
+        let info  = session.types.new_session_info(id, uid, token, SessionStatus::Revoked);
+        assert typeof(info.status) == SessionStatus;
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `session.types` — core value types for the session domain.
+    //!
+    //! All types in this module are pure value types: no IO, no clock reads,
+    //! no database access. This module mirrors the design of `user.types`.
+    //!
+    //! # Effects
+    //! None. All functions are pure computations.
+
+    use super::super::user::types::UserId;
+
+    /// Opaque session identifier.
+    #[allow(dead_code)]
+    pub struct SessionId(u64);
+
+    /// Opaque session token. The inner `String` is not exposed.
+    #[allow(dead_code)]
+    pub struct SessionToken(String);
+
+    /// Lifecycle state of a session.
+    pub enum SessionStatus {
+        Active,
+        Expired,
+        Revoked,
+    }
+
+    /// Aggregated session info: identity + user reference + token + status.
+    pub struct SessionInfo {
+        pub id:      SessionId,
+        pub user_id: UserId,
+        pub token:   SessionToken,
+        pub status:  SessionStatus,
+    }
+
+    /// Wrap a raw `u64` into a `SessionId`.
+    pub fn new_session_id(raw: u64) -> SessionId {
+        SessionId(raw)
+    }
+
+    /// Wrap a raw string into a `SessionToken`. No format validation in v0.
+    pub fn new_session_token(raw: String) -> SessionToken {
+        SessionToken(raw)
+    }
+
+    /// Combine session components into a `SessionInfo`.
+    pub fn new_session_info(
+        id: SessionId,
+        user_id: UserId,
+        token: SessionToken,
+        status: SessionStatus,
+    ) -> SessionInfo {
+        SessionInfo { id, user_id, token, status }
+    }
+  }
+
+}

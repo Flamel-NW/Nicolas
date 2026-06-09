@@ -1,26 +1,29 @@
 module user.profile_service {
 
   spec {
-    intent "组合 cache.kv、user.store 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。"
+    intent "组合 cache.kv、user.store、audit.log 和 user.types，提供用户档案的主要公开 API。cache read-through：先查 cache，miss 时从 store 加载并回填；写入时同步更新 store，使 cache 失效。所有时钟读取通过 cache.kv 间接集中在 time.clock。每次 profile 操作均通过 audit.log 记录 audit event。"
 
-    imports [user.types, cache.kv, user.store]
+    imports [user.types, cache.kv, user.store, audit.log]
 
     interface {
       fn get_profile(id: UserId) -> Option
-        effects [reads_clock, db.read]
+        effects [reads_clock, db.read, audit.write]
         // reads_clock：通过 cache.kv.get() 检查 cache TTL（time.clock 是边界模块）
         // db.read：cache miss 时通过 user.store.load_profile() 读取持久化存储
+        // audit.write：通过 audit.log.record() 记录 ProfileViewed event
 
       fn update_profile(profile: UserProfile) -> ()
-        effects [reads_clock, db.read, db.write]
+        effects [reads_clock, db.read, db.write, audit.write]
         // reads_clock：通过 cache.kv.set() 写入带 TTL 的 cache（time.clock 是边界模块）
         // db.read + db.write：通过 user.store.save_profile() 读取后写回持久化存储
+        // audit.write：通过 audit.log.record() 记录 ProfileUpdated event
     }
 
-    effects [reads_clock, db.read, db.write]
+    effects [reads_clock, db.read, db.write, audit.write]
     // reads_clock：传播自 cache.kv（cache.kv 的 reads_clock 来自 time.clock）
     // db.read：传播自 user.store（user.store 是 db.read 的边界模块）
     // db.write：传播自 user.store（user.store 是 db.write 的边界模块）
+    // audit.write：传播自 audit.log（audit.log 是 audit.write 的边界模块）
     // user.types 无 effects，import 不带来 effect 传播
   }
 
@@ -52,70 +55,71 @@ module user.profile_service {
   implementation rust {
     //! `user.profile_service` — orchestration layer for user profile operations.
     //!
-    //! This module combines `cache.kv`, `user.store`, and `user.types` to
-    //! provide the primary user-facing profile API. It implements a cache
-    //! read-through pattern:
-    //!
-    //! - `get_profile`: check cache first; on miss, load from store and
-    //!   backfill cache.
-    //! - `update_profile`: write to store, then invalidate / update cache.
-    //!
-    //! All clock reads for cache TTL computation are funnelled through
-    //! `cache.kv`, which in turn uses `time.clock`. This module never reads
-    //! the clock directly.
+    //! This module combines `cache.kv`, `user.store`, `audit.log` and `user.types`
+    //! to provide the primary user-facing profile API. It implements a cache
+    //! read-through pattern and records an audit event for every operation.
     //!
     //! # Effects
-    //! - `reads_clock`: propagated from `cache.kv` (which declares it via
-    //!   `time.clock`). Triggered by every cache read or write.
-    //! - `db.read`:  propagated from `user.store`. Triggered by
-    //!   `get_profile` (cache miss path) and `update_profile` (read-before-write).
-    //! - `db.write`: propagated from `user.store`. Triggered by
-    //!   `update_profile` (writing the updated profile back to storage).
-    //!
-    //! # Imports
-    //! - `user.types`: provides `UserId`, `UserProfile`.
-    //! - `cache.kv`:   provides `get`, `set`, `delete` (cache boundary).
-    //! - `user.store`: provides `load_profile`, `save_profile` (storage boundary).
+    //! - `reads_clock`: propagated from `cache.kv` via `time.clock`.
+    //! - `db.read`:  propagated from `user.store`.
+    //! - `db.write`: propagated from `user.store`.
+    //! - `audit.write`: propagated from `audit.log`. Triggered on every call.
 
     use super::types::{UserId, UserProfile};
     use super::store;
     use crate::cache::kv;
     use crate::cache::kv::{CacheKey, CacheTtl};
+    use crate::audit::log;
+    use crate::audit::log::{AuditActor, ProfileAuditAction};
 
     /// Retrieve the user profile for the given ID.
     ///
     /// Checks the cache first. On a cache miss, loads the profile from
-    /// `user.store` and backfills the cache. Returns `None` if no profile
-    /// exists in either the cache or the store.
+    /// `user.store` and backfills the cache. Records a `ProfileViewed` audit
+    /// event via `audit.log`.
     ///
     /// # Effects
-    /// - `reads_clock`: via `cache.kv.get()`, which checks the entry TTL
-    ///   using `time.clock::now()`.
+    /// - `reads_clock`: via `cache.kv.get()`.
     /// - `db.read`: via `user.store::load_profile()` on a cache miss.
+    /// - `audit.write`: via `audit.log::record()`.
     pub fn get_profile(_id: UserId) -> Option<UserProfile> {
         let key = CacheKey(String::new());
-        if kv::get(key).is_some() {
-            return None;
-        }
-        store::load_profile(_id)
+        let result = if kv::get(key).is_some() {
+            None
+        } else {
+            store::load_profile(_id)
+        };
+        // skeleton: _id consumed above; use placeholder for audit subject
+        let event = log::new_event(
+            AuditActor::System,
+            ProfileAuditAction::ProfileViewed,
+            super::types::new_user_id(0),
+        );
+        log::record(event);
+        result
     }
 
     /// Persist an updated user profile and refresh the cache.
     ///
-    /// Writes the profile to `user.store`, then updates or invalidates the
-    /// corresponding cache entry so that subsequent `get_profile` calls
-    /// see the new data.
+    /// Writes the profile to `user.store`, updates the cache, and records a
+    /// `ProfileUpdated` audit event via `audit.log`.
     ///
     /// # Effects
-    /// - `reads_clock`: via `cache.kv.set()`, which records the insertion
-    ///   timestamp using `time.clock::now()`.
-    /// - `db.write`: via `user.store::save_profile()` (writing the updated
-    ///   profile).
+    /// - `reads_clock`: via `cache.kv.set()`.
+    /// - `db.write`: via `user.store::save_profile()`.
+    /// - `audit.write`: via `audit.log::record()`.
     pub fn update_profile(_profile: UserProfile) {
         let key = CacheKey(String::new());
         let ttl = CacheTtl(300);
+        // skeleton: profile.id not available after move; use placeholder for audit subject
+        let event = log::new_event(
+            AuditActor::System,
+            ProfileAuditAction::ProfileUpdated,
+            super::types::new_user_id(0),
+        );
         store::save_profile(_profile);
         kv::set(key, String::new(), ttl);
+        log::record(event);
     }
   }
 

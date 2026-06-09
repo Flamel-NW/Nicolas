@@ -1,0 +1,80 @@
+module config.loader {
+
+  spec {
+    intent "通过窄模块边界提供配置键值读取能力，集中承载 reads_config effect，避免其他模块隐式读取配置来源。config.loader 是整个场景中唯一的 reads_config 边界模块。"
+
+    interface {
+      // 公开 types
+      type ConfigKey    // 不透明配置键；内部表示：String
+      type ConfigValue  // 不透明配置值；内部表示：String
+
+      // 公开 functions
+      fn new_config_key(raw: String) -> ConfigKey
+        // 纯构造函数，无 effects
+
+      fn load(key: ConfigKey) -> Option
+        effects [reads_config]
+        // 读取配置键对应的值；不存在则返回 None
+    }
+
+    effects [reads_config]
+    // 无 imports：config.loader 不依赖任何其他模块
+  }
+
+  checks {
+    examples {
+      example load_existing_key {
+        // 验证已存在的配置键可被读取，返回 Some(ConfigValue)
+        // 对应 examples/config_loader_load_existing_key.rs
+        let key = config.loader.new_config_key("database.host");
+        let result = config.loader.load(key);
+        assert result.is_some();
+      }
+
+      example load_missing_key_returns_none {
+        // 验证不存在的键返回 None
+        // 对应 examples/config_loader_load_missing_key_returns_none.rs
+        let key = config.loader.new_config_key("__nonexistent_key_xyz__");
+        let result = config.loader.load(key);
+        assert result.is_none();
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `config.loader` — narrow configuration-reading boundary.
+    //!
+    //! This module provides configuration value lookup through a single
+    //! opaque interface. All `reads_config` effects in the codebase are
+    //! funnelled through this module.
+    //!
+    //! # Effects
+    //! - `reads_config`: declared at module level; introduced by `load()`.
+
+    /// Opaque configuration key (internal representation: String).
+    #[allow(dead_code)]
+    pub struct ConfigKey(String);
+
+    /// Opaque configuration value (internal representation: String).
+    #[allow(dead_code)]
+    pub struct ConfigValue(String);
+
+    /// Constructs a `ConfigKey` from a raw string. Pure constructor, no effects.
+    pub fn new_config_key(raw: String) -> ConfigKey {
+        ConfigKey(raw)
+    }
+
+    /// Reads a configuration value for the given key.
+    ///
+    /// Returns `Some(ConfigValue)` if the key exists, or `None` if not found.
+    ///
+    /// # Effects
+    /// - `reads_config`: reads from the underlying configuration source.
+    pub fn load(_key: ConfigKey) -> Option<ConfigValue> {
+        todo!("config.loader::load: real implementation pending")
+    }
+  }
+
+}
