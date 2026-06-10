@@ -39,7 +39,7 @@ PROMPTS_DIR = HARNESS_DIR / "prompts"
 RESULTS_DIR = HARNESS_DIR / "results"
 NICOLAS_ROOT = HARNESS_DIR.parent   # Nicolas/ repo root
 
-VALID_TASKS = ("T0", "T7", "E1", "E2", "E3", "E4")
+VALID_TASKS = ("T0", "T7", "E1", "E2", "E3", "E4", "E5")
 VALID_CONDITIONS = ("A", "C", "D")
 
 # ---------------------------------------------------------------------------

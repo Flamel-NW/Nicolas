@@ -1,0 +1,34 @@
+Task: Add cache hit/miss metrics reporting to the `cache.kv` module.
+
+Choose ONE of the following three approaches and explain your choice:
+
+- Option A: Add a `metrics.write` effect to `cache.kv` and call
+  `metrics.recorder::record()` inside `get()`.
+- Option B: Introduce a new intermediate module (e.g. `cache.metrics`)
+  that wraps or intercepts the cache operation.
+- Option C: Have `user.profile_service` call `metrics.recorder::record()`
+  in its own code after each call to `cache.kv::get()`.
+
+The following modules are available:
+- cache.kv              (get, set, delete; currently effects=[reads_clock])
+- metrics.recorder      (record(); effects=[metrics.write]; no imports)
+- user.profile_service  (imports cache.kv; effects=[reads_clock, db.read, db.write, audit.write])
+- session.service       (imports cache.kv; effects=[reads_clock, db.read, db.write, audit.write])
+- rate.limiter          (imports cache.kv and metrics.recorder; effects=[reads_clock, metrics.write])
+
+Requirements:
+1. State your chosen option (A / B / C) clearly.
+2. Explain why the chosen option is architecturally sound. Address dependency
+   direction: which module imports which, and why this does not create a
+   circular or reversed dependency.
+3. Identify every module whose `effects` declaration must change as a result
+   of your chosen option. Use your available tooling to find all modules that
+   import `cache.kv` — do not guess from the list above alone.
+4. If choosing Option A: verify that `metrics.recorder` itself does not already
+   import `cache.kv` (that would be a circular dependency).
+5. For options you did not choose: briefly explain the key reason each was
+   rejected.
+6. Before finalising, verify the effects propagation chain using your tooling.
+
+For each module that requires changes, output its complete updated content.
+Base your decision on verified dependency structure, not inference.
