@@ -1,0 +1,32 @@
+Task: Extend `cache.kv` with a per-key TTL policy type (`CacheTtlPolicy`) and propagate
+the interface change to all callers of `cache.kv.set()`.
+
+Currently, `cache.kv.set()` accepts a single opaque `CacheTtl(u64)` value (seconds).
+Replace this with a richer `CacheTtlPolicy` enum that supports two modes:
+  - `Fixed(CacheTtl)` — expire after the given fixed duration (same behaviour as today)
+  - `NoExpiry`        — never expire (do not call time.clock for this entry)
+
+The following modules are the primary focus of this task:
+- cache.kv    (where the CacheTtl type and set() function are defined)
+- time.clock  (the reads_clock effect boundary; consider whether it needs changes)
+
+Requirements:
+1. Add the `CacheTtlPolicy` enum to `cache.kv`, with variants `Fixed(CacheTtl)` and `NoExpiry`.
+2. Update the `fn set(key: CacheKey, value: String, ttl: CacheTtl)` signature to
+   `fn set(key: CacheKey, value: String, policy: CacheTtlPolicy)`.
+   The `CacheTtl` type itself is kept (used inside `Fixed`); only the `set` parameter changes.
+3. Determine whether `time.clock` requires any changes. Justify your decision based on
+   what `reads_clock` actually needs.
+4. Do not stop at the modules listed above. Before finalising your answer, actively
+   check whether any other module calls `cache.kv.set()` with the old `CacheTtl`
+   argument. If your tooling allows you to query the call graph or import graph, do so.
+   Update every call site to pass `CacheTtlPolicy::Fixed(ttl)` where a fixed TTL was
+   previously used.
+5. Verify that the `reads_clock` effect declaration on `cache.kv` and any callers
+   remains correct after the change. Do not remove or add effects unless the propagation
+   rules clearly require it.
+6. Do not introduce new module imports, change function behaviour, or alter any type
+   other than the changes described above.
+
+For each module that requires changes, output its complete updated content.
+Be precise. A type mismatch at any call site will cause a compilation failure.
