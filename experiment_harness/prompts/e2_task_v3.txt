@@ -1,0 +1,26 @@
+Task: Rename the type `UserProfile` to `UserRecord` in the `user.types` module.
+This is a pure rename — do not change any function behaviour, logic, or module structure.
+
+The following modules are known to be part of this scenario:
+- user.types (where the type is defined)
+- user.store (user profile persistence boundary)
+- audit.log (audit event recording)
+- user.profile_service (user-facing profile API)
+
+Requirements:
+1. Rename the `UserProfile` type definition in `user.types` to `UserRecord`,
+   including the struct declaration and the return type of `new_profile`.
+2. Update every module that references `UserProfile` by name — in type annotations,
+   function signatures, use/import statements, or struct literals — so that all
+   references consistently use `UserRecord`.
+3. Determine whether `audit.log` requires any changes. Justify your decision
+   based on what types `AuditEvent` actually contains.
+4. Do not stop at the modules listed above. Before finalising your answer,
+   actively check whether any other module imports `user.types` and uses
+   `UserProfile`. If your tooling allows you to query the module dependency
+   graph, do so.
+5. Do not introduce new imports, change function behaviour, or alter any type
+   other than renaming `UserProfile` to `UserRecord`.
+
+For each module that requires changes, output its complete updated content.
+Be precise. A missed rename in any single module will cause a compilation failure.

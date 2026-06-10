@@ -29,7 +29,7 @@ from dotenv import load_dotenv, find_dotenv
 # Config
 # ---------------------------------------------------------------------------
 MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 4096
+MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
 
@@ -39,7 +39,7 @@ PROMPTS_DIR = HARNESS_DIR / "prompts"
 RESULTS_DIR = HARNESS_DIR / "results"
 NICOLAS_ROOT = HARNESS_DIR.parent   # Nicolas/ repo root
 
-VALID_TASKS = ("T0", "T7", "E1")
+VALID_TASKS = ("T0", "T7", "E1", "E2")
 VALID_CONDITIONS = ("A", "C", "D")
 
 # ---------------------------------------------------------------------------
