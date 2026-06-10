@@ -1,0 +1,122 @@
+module user.store {
+
+  spec {
+    intent "提供用户档案的持久化读写边界。user.store 是整个场景中唯一直接操作持久化存储的模块，集中承载 db.read 和 db.write effects。上层模块（如 user.profile_service）通过 import user.store 使用持久化操作，不得绕过此边界直接访问存储层。"
+
+    imports [user.types]
+
+    interface {
+      // 公开 functions
+      fn load_profile(id: UserId) -> Option
+        effects [db.read]
+        // 按 UserId 查询持久化存储，返回对应 UserProfile；不存在则返回 None
+
+      fn save_profile(profile: UserProfile) -> ()
+        effects [db.write]
+        // 将 UserProfile 写入持久化存储；已存在则覆盖，不存在则插入
+
+      fn mark_deactivated(id: UserId) -> ()
+        effects [db.read, db.write]
+        // 读取现有档案，将 UserStatus 更新为 Inactive，写回存储
+        // 若 UserId 不存在，操作为 no-op（v0 skeleton）
+    }
+
+    effects [db.read, db.write]
+    // db.read：由 load_profile 和 mark_deactivated 引入（读取持久化存储）
+    // db.write：由 save_profile 和 mark_deactivated 引入（写入持久化存储）
+    // 无 reads_clock：user.store 不直接读取时钟；时间戳若需要，由调用方传入
+    // 无 imports 带来的 effects：user.types 是纯值类型模块，无任何 effects
+  }
+
+  checks {
+    examples {
+      example load_existing {
+        // 验证：存储中存在的用户档案可以被正确加载
+        // 对应 examples/user_store_load_existing.rs
+        let id      = user.types.new_user_id(1);
+        let result  = user.store.load_profile(id);
+        assert result.is_some();
+      }
+
+      example save_new_profile {
+        // 验证：新建用户档案写入后可被加载取回
+        // 对应 examples/user_store_save_new_profile.rs
+        let id      = user.types.new_user_id(42);
+        let email   = user.types.new_email("bob@example.com");
+        let profile = user.types.new_profile(id, email.unwrap(), UserStatus::Active);
+        user.store.save_profile(profile);
+        let loaded  = user.store.load_profile(user.types.new_user_id(42));
+        assert loaded.is_some();
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `user.store` — user profile persistence boundary.
+    //!
+    //! This module is the single durable storage boundary for user profiles in
+    //! the `Cached User Profile Service` scenario. All database reads and writes
+    //! for user data are funnelled through this module so that:
+    //!
+    //! - LLM agents can find every persistent-storage operation by querying the
+    //!   Semantic DB for modules that declare `db.read` or `db.write`.
+    //! - Tests can substitute a controlled storage backend without modifying the
+    //!   modules that depend on `user.store`.
+    //!
+    //! # Effects
+    //! - `db.read`:  declared at module level; introduced by `load_profile`
+    //!               (fetching a stored profile) and `mark_deactivated`
+    //!               (reading the current profile before updating status).
+    //! - `db.write`: declared at module level; introduced by `save_profile`
+    //!               (writing a new or updated profile) and `mark_deactivated`
+    //!               (writing the updated status back to storage).
+    //!
+    //! # Boundary module note
+    //! `user.store` is the *boundary module* for `db.read` and `db.write`,
+    //! analogous to `time.clock` being the boundary for `reads_clock`.
+    //! Under the Restricted Rust constraint, only this module may directly call
+    //! database driver APIs. All upstream modules must call `user.store` public
+    //! functions instead.
+    //!
+    //! # Non-goals (v0 skeleton)
+    //! The current implementation is a skeleton (`todo!()`). A real
+    //! implementation would maintain a database connection and map
+    //! `UserId` → serialized `UserProfile` rows.
+
+    #[allow(unused_imports)]
+    use super::types::{UserId, UserProfile, UserStatus};
+
+    /// Fetch the stored profile for the given user ID.
+    ///
+    /// Returns `None` if no profile exists for `id`.
+    ///
+    /// # Effects
+    /// - `db.read`: reads from the persistent user profile store.
+    pub fn load_profile(_id: UserId) -> Option<UserProfile> {
+        todo!("user.store::load_profile: real implementation pending")
+    }
+
+    /// Persist a user profile, inserting or overwriting as needed.
+    ///
+    /// # Effects
+    /// - `db.write`: writes to the persistent user profile store.
+    pub fn save_profile(_profile: UserProfile) {
+        todo!("user.store::save_profile: real implementation pending")
+    }
+
+    /// Set the user's status to `Inactive` in the persistent store.
+    ///
+    /// Reads the current profile, updates `UserStatus` to `Inactive`, and
+    /// writes it back. If `id` does not exist, this is a no-op (v0 skeleton).
+    ///
+    /// # Effects
+    /// - `db.read`:  reads the current profile to preserve other fields.
+    /// - `db.write`: writes the updated profile back to storage.
+    pub fn mark_deactivated(_id: UserId) {
+        todo!("user.store::mark_deactivated: real implementation pending")
+    }
+  }
+
+}

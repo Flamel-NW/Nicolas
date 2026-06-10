@@ -1,0 +1,34 @@
+Task: Add a new function `suspend_user(id: UserId) -> ()` to the
+`user.profile_service` module.
+
+This function should:
+1. Mark the user as deactivated in persistent storage (via user.store).
+2. Invalidate the user's cache entry (via cache.kv).
+3. Record a UserDeactivated audit event (via audit.log).
+
+The following modules are available and contain all the functionality you need:
+- user.profile_service  (where the new function must be added)
+- user.store            (provides mark_deactivated and other persistence operations)
+- audit.log             (provides audit event types and record())
+- cache.kv              (provides cache operations including get, set, delete)
+- time.clock            (provides the reads_clock effect boundary)
+
+Requirements:
+1. Add `suspend_user` to `user.profile_service` with the correct function
+   signature: `fn suspend_user(id: UserId) -> ()`.
+2. Declare ALL effects that `suspend_user` propagates. Consider the effects
+   of every function it calls, including any read-before-write patterns in
+   the called functions. Do not guess — verify the effects of each callee
+   using your available tooling.
+3. Decide whether `reads_clock` should be declared. Justify your choice based
+   on which cache.kv function you use and whether that function has any effects.
+4. Do not modify `user.store`, `audit.log`, `cache.kv`, or `time.clock` —
+   all required functionality already exists in those modules.
+5. Do not change the module-level effects declaration of `user.profile_service`
+   unless it is genuinely incomplete after adding the new function.
+6. Before finalising your answer, actively verify the effects of every function
+   you call (including sub-calls) using your available tooling. An undeclared
+   effect is a correctness defect.
+
+For each module that requires changes, output its complete updated content.
+Be precise. A missing effect declaration is as serious as a missing function body.
