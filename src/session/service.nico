@@ -13,7 +13,7 @@ module session.service {
         effects [reads_clock, db.read]
 
       fn revoke_session(id: SessionId) -> ()
-        effects [reads_clock, db.read, db.write, audit.write]
+        effects [db.read, db.write, audit.write]
     }
 
     effects [reads_clock, db.read, db.write, audit.write]
@@ -69,7 +69,7 @@ module session.service {
     pub fn validate_session(_id: SessionId) -> bool {
         let _cached = kv::get(CacheKey(String::new()));
         let _stored = store::load_session(crate::session::types::new_session_id(0));
-        false
+        _stored.is_some()
     }
 
     pub fn revoke_session(_id: SessionId) {

@@ -8,6 +8,8 @@ use crate::metrics::recorder;
 use crate::metrics::recorder::MetricValue;
 
 pub fn list_users() -> Vec<UserProfile> {
+    // v0 skeleton: full implementation requires cursor/pagination API over user.store;
+    // placeholder loads a single profile to preserve the db.read call edge; post-v0.1
     let _sample = store::load_profile(super::types::new_user_id(0));
     Vec::new()
 }
@@ -26,6 +28,8 @@ pub fn force_deactivate(_id: UserId) {
 }
 
 pub fn lookup_audit_trail(_id: UserId) -> Vec<String> {
+    // v0 skeleton: full implementation requires audit query API (audit.log is boundary-only,
+    // write-only in v0); placeholder loads profile to preserve call edge; post-v0.1
     let _profile = store::load_profile(super::types::new_user_id(0));
     Vec::new()
 }

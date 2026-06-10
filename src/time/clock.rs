@@ -14,9 +14,7 @@
 //! # Effects
 //! - `reads_clock`: declared at module level; introduced by `now()`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Opaque wall-clock timestamp (internal precision: seconds since Unix epoch).
+/// Opaque wall-clock timestamp (internal precision: nanoseconds).
 ///
 /// The internal representation is intentionally not exposed so that
 /// downstream modules cannot construct arbitrary `Timestamp` values
@@ -24,20 +22,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
 pub struct Timestamp(u64);
 
-/// A duration of time (internal precision: seconds).
+/// A duration of time (internal precision: nanoseconds).
 ///
 /// Kept opaque for the same reason as `Timestamp`.
 #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
 pub struct Duration(u64);
 
-/// Returns the current wall-clock time as seconds since the Unix epoch.
+/// Returns the current wall-clock time.
 ///
 /// # Effects
-/// - `reads_clock`: reads the system clock via `std::time::SystemTime`.
+/// - `reads_clock`: reads the system clock.
+///
+/// # Notes
+/// This is a skeleton implementation (`todo!()`). The real
+/// implementation will call the OS time API and return a `Timestamp`
+/// wrapping the nanoseconds since the Unix epoch.
 pub fn now() -> Timestamp {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time went backwards")
-        .as_secs();
-    Timestamp(secs)
+    todo!("time.clock::now: real implementation pending")
 }

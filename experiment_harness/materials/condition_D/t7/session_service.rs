@@ -4,7 +4,7 @@
 // @nico-module-effects: reads_clock, db.read, db.write, audit.write
 // @nico-fn: create_session | pub fn create_session(user_id: UserId) -> SessionId | effects=reads_clock,db.write,audit.write | calls=cache.kv::get,session.store::save_session,audit.log::new_event,audit.log::record
 // @nico-fn: validate_session | pub fn validate_session(id: SessionId) -> bool | effects=reads_clock,db.read | calls=cache.kv::get,session.store::load_session
-// @nico-fn: revoke_session | pub fn revoke_session(id: SessionId) -> () | effects=reads_clock,db.read,db.write,audit.write | calls=cache.kv::delete,session.store::revoke_session,audit.log::new_event,audit.log::record
+// @nico-fn: revoke_session | pub fn revoke_session(id: SessionId) -> () | effects=db.read,db.write,audit.write | calls=cache.kv::delete,session.store::revoke_session,audit.log::new_event,audit.log::record
 
 use crate::user::types::UserId;
 use crate::session::store;

@@ -28,7 +28,7 @@ pub fn create_session(_user_id: UserId) -> SessionId {
 pub fn validate_session(_id: SessionId) -> bool {
     let _cached = kv::get(CacheKey(String::new()));
     let _stored = store::load_session(crate::session::types::new_session_id(0));
-    false
+    _stored.is_some()
 }
 
 pub fn revoke_session(_id: SessionId) {

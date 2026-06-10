@@ -22,10 +22,22 @@
         ],
         "return_type": "SessionId",
         "calls": [
-          {"callee_module": "cache.kv", "callee_fn": "get"},
-          {"callee_module": "session.store", "callee_fn": "save_session"},
-          {"callee_module": "audit.log", "callee_fn": "new_event"},
-          {"callee_module": "audit.log", "callee_fn": "record"}
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "get"
+          },
+          {
+            "callee_module": "session.store",
+            "callee_fn": "save_session"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "new_event"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "record"
+          }
         ]
       },
       {
@@ -38,8 +50,14 @@
         ],
         "return_type": "bool",
         "calls": [
-          {"callee_module": "cache.kv", "callee_fn": "get"},
-          {"callee_module": "session.store", "callee_fn": "load_session"}
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "get"
+          },
+          {
+            "callee_module": "session.store",
+            "callee_fn": "load_session"
+          }
         ]
       },
       {
@@ -47,17 +65,28 @@
         "signature": "pub fn revoke_session(id: SessionId) -> ()",
         "visibility": "pub",
         "effects": [
-          "reads_clock",
           "db.read",
           "db.write",
           "audit.write"
         ],
         "return_type": "()",
         "calls": [
-          {"callee_module": "cache.kv", "callee_fn": "delete"},
-          {"callee_module": "session.store", "callee_fn": "revoke_session"},
-          {"callee_module": "audit.log", "callee_fn": "new_event"},
-          {"callee_module": "audit.log", "callee_fn": "record"}
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "delete"
+          },
+          {
+            "callee_module": "session.store",
+            "callee_fn": "revoke_session"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "new_event"
+          },
+          {
+            "callee_module": "audit.log",
+            "callee_fn": "record"
+          }
         ]
       }
     ]
@@ -69,14 +98,36 @@
     "audit.write"
   ],
   "propagated_effects": [
-    {"effect": "audit.write", "source_module": "audit.log", "depth": 1},
-    {"effect": "reads_clock", "source_module": "cache.kv", "depth": 1},
-    {"effect": "db.read", "source_module": "session.store", "depth": 1},
-    {"effect": "db.write", "source_module": "session.store", "depth": 1}
+    {
+      "effect": "audit.write",
+      "source_module": "audit.log",
+      "depth": 1
+    },
+    {
+      "effect": "reads_clock",
+      "source_module": "cache.kv",
+      "depth": 1
+    },
+    {
+      "effect": "db.read",
+      "source_module": "session.store",
+      "depth": 1
+    },
+    {
+      "effect": "db.write",
+      "source_module": "session.store",
+      "depth": 1
+    }
   ],
   "examples": [
-    {"id": "create_and_validate", "path": "examples/session_service_create_and_validate.rs"},
-    {"id": "revoke_invalidates", "path": "examples/session_service_revoke_invalidates.rs"}
+    {
+      "id": "create_and_validate",
+      "path": "examples/session_service_create_and_validate.rs"
+    },
+    {
+      "id": "revoke_invalidates",
+      "path": "examples/session_service_revoke_invalidates.rs"
+    }
   ],
   "intent": "组合 cache.kv、session.store、audit.log 和 user.types，提供 session 生命周期的主要公开 API。create_session 写入持久化存储并记录 audit；validate_session 先查 cache，miss 时从 store 读取；revoke_session 使 cache 失效、撤销持久化存储中的 session，并记录 audit。所有时钟读取通过 cache.kv 间接集中在 time.clock。",
   "field_levels": {

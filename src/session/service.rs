@@ -9,6 +9,8 @@ use crate::audit::log;
 use crate::audit::log::{AuditActor, ProfileAuditAction};
 
 pub fn create_session(_user_id: UserId) -> SessionId {
+    // v0 skeleton: ProfileAuditAction::ProfileViewed is a placeholder;
+    // post-v0.1 will introduce a dedicated SessionAuditAction enum
     let _cached = kv::get(CacheKey(String::new()));
     let _token = crate::session::types::new_session_token(String::new());
     let _info = crate::session::types::new_session_info(
@@ -30,7 +32,7 @@ pub fn create_session(_user_id: UserId) -> SessionId {
 pub fn validate_session(_id: SessionId) -> bool {
     let _cached = kv::get(CacheKey(String::new()));
     let _stored = store::load_session(crate::session::types::new_session_id(0));
-    false
+    _stored.is_some()
 }
 
 pub fn revoke_session(_id: SessionId) {

@@ -13,9 +13,9 @@ module user.profile_service {
         // audit.write：通过 audit.log.record() 记录 ProfileViewed event
 
       fn update_profile(profile: UserProfile) -> ()
-        effects [reads_clock, db.read, db.write, audit.write]
+        effects [reads_clock, db.write, audit.write]
         // reads_clock：通过 cache.kv.set() 写入带 TTL 的 cache（time.clock 是边界模块）
-        // db.read + db.write：通过 user.store.save_profile() 读取后写回持久化存储
+        // db.write：通过 user.store.save_profile() 写回持久化存储
         // audit.write：通过 audit.log.record() 记录 ProfileUpdated event
     }
 
@@ -83,11 +83,14 @@ module user.profile_service {
     /// - `db.read`: via `user.store::load_profile()` on a cache miss.
     /// - `audit.write`: via `audit.log::record()`.
     pub fn get_profile(_id: UserId) -> Option<UserProfile> {
-        let key = CacheKey(String::new());
-        let result = if kv::get(key).is_some() {
-            None
-        } else {
+        let result = if kv::get(CacheKey(String::new())).is_some() {
+            // skeleton: cache hit; real impl would deserialize cached string
             store::load_profile(_id)
+        } else {
+            let profile = store::load_profile(_id);
+            // backfill cache on miss
+            kv::set(CacheKey(String::new()), String::new(), CacheTtl(300));
+            profile
         };
         // skeleton: _id consumed above; use placeholder for audit subject
         let event = log::new_event(

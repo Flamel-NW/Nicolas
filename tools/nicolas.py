@@ -383,15 +383,23 @@ def cmd_json(nico_path: Path) -> None:
     rs_path = project_root / p['source']
     fn_calls_map: dict = {}
     form_map: dict = {}
+    fn_return_type_map: dict = {}
     if rs_path.exists():
         extract_data = run_extract(rs_path, project_root)
         if extract_data:
-            alias_map    = build_alias_module_map(extract_data.get('uses', []), p['module_name'])
-            fn_calls_map = derive_calls(extract_data.get('functions', []), alias_map)
-            form_map     = {t['name']: t['form'] for t in extract_data.get('types', [])}
+            alias_map          = build_alias_module_map(extract_data.get('uses', []), p['module_name'])
+            fn_calls_map       = derive_calls(extract_data.get('functions', []), alias_map)
+            form_map           = {t['name']: t['form'] for t in extract_data.get('types', [])}
+            fn_return_type_map = {
+                fn['name']: fn['return_type']
+                for fn in extract_data.get('functions', [])
+                if fn.get('return_type')
+            }
 
     for fn in p['functions']:
         fn['calls'] = fn_calls_map.get(fn['name'], [])
+        if fn['name'] in fn_return_type_map:
+            fn['return_type'] = fn_return_type_map[fn['name']]
     for t in p['types']:
         t['repr'] = form_map.get(t['name'], 'opaque')
 

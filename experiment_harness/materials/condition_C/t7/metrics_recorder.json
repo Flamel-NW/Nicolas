@@ -1,0 +1,70 @@
+{
+  "schema_version": "0.1.0-draft",
+  "module": "metrics.recorder",
+  "source": "src/metrics/recorder.rs",
+  "imports": [],
+  "provides": {
+    "types": [
+      {
+        "name": "MetricName",
+        "visibility": "pub",
+        "repr": "newtype"
+      },
+      {
+        "name": "MetricValue",
+        "visibility": "pub",
+        "repr": "newtype"
+      }
+    ],
+    "functions": [
+      {
+        "name": "new_metric_name",
+        "signature": "pub fn new_metric_name(raw: String) -> MetricName",
+        "visibility": "pub",
+        "effects": [],
+        "return_type": "MetricName",
+        "calls": []
+      },
+      {
+        "name": "record",
+        "signature": "pub fn record(name: MetricName, value: MetricValue) -> ()",
+        "visibility": "pub",
+        "effects": [
+          "metrics.write"
+        ],
+        "return_type": "()",
+        "calls": []
+      }
+    ]
+  },
+  "effects": [
+    "metrics.write"
+  ],
+  "propagated_effects": [],
+  "examples": [
+    {
+      "id": "record_counter",
+      "path": "examples/metrics_recorder_record_counter.rs"
+    },
+    {
+      "id": "record_gauge",
+      "path": "examples/metrics_recorder_record_gauge.rs"
+    }
+  ],
+  "intent": "提供 metrics 写入的唯一边界。所有需要记录指标的模块均通过此接口写入，避免其他模块直接触发 metrics.write effect。record 函数将 MetricName 与 MetricValue 一并写入底层 metrics 系统。",
+  "field_levels": {
+    "schema_version": "hard",
+    "module": "hard",
+    "source": "hard",
+    "imports": "hard",
+    "provides": "hard",
+    "provides.types": "hard",
+    "provides.functions": "hard",
+    "provides.functions.calls": "hard",
+    "effects": "hard",
+    "propagated_effects": "hard",
+    "examples": "hard",
+    "intent": "advisory"
+  },
+  "generation_note": "nicolas json v0 — extracted from recorder.nico; provides.functions[].calls derived from Rust-AST via nicolas-extract; propagated_effects derived from import graph BFS over .nico files. not a full compiler output. Experiment results must note this limitation."
+}

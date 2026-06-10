@@ -11,11 +11,14 @@ use crate::audit::log::{AuditActor, ProfileAuditAction};
 /// profile from user.store::load_profile and backfills the cache. Records a
 /// ProfileViewed audit event. Returns `None` if no profile exists.
 pub fn get_profile(_id: UserId) -> Option<UserProfile> {
-    let key = CacheKey(String::new());
-    let result = if kv::get(key).is_some() {
-        None
-    } else {
+    let result = if kv::get(CacheKey(String::new())).is_some() {
+        // skeleton: cache hit; real impl would deserialize cached string
         store::load_profile(_id)
+    } else {
+        let profile = store::load_profile(_id);
+        // backfill cache on miss
+        kv::set(CacheKey(String::new()), String::new(), CacheTtl(300));
+        profile
     };
     let event = log::new_event(
         AuditActor::System,

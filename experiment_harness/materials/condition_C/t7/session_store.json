@@ -15,7 +15,7 @@
         "effects": [
           "db.read"
         ],
-        "return_type": "Option",
+        "return_type": "Option<SessionInfo>",
         "calls": []
       },
       {

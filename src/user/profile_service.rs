@@ -30,11 +30,14 @@ use crate::audit::log::{AuditActor, ProfileAuditAction};
 /// - `db.read`: via `user.store::load_profile()` on a cache miss.
 /// - `audit.write`: via `audit.log::record()`.
 pub fn get_profile(_id: UserId) -> Option<UserProfile> {
-    let key = CacheKey(String::new());
-    let result = if kv::get(key).is_some() {
-        None
-    } else {
+    let result = if kv::get(CacheKey(String::new())).is_some() {
+        // skeleton: cache hit; real impl would deserialize cached string
         store::load_profile(_id)
+    } else {
+        let profile = store::load_profile(_id);
+        // backfill cache on miss
+        kv::set(CacheKey(String::new()), String::new(), CacheTtl(300));
+        profile
     };
     // skeleton: _id consumed above; use placeholder for audit subject
     let event = log::new_event(
