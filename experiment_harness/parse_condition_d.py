@@ -28,6 +28,7 @@ Usage:
     python parse_condition_d.py
 """
 
+import argparse
 import json
 import os
 import sqlite3
@@ -39,7 +40,6 @@ from dotenv import load_dotenv, find_dotenv
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
-D_DIR = MATERIALS_DIR / "condition_D" / "t7"
 D_TRUSTED_PATH = MATERIALS_DIR / "sem_d_trusted.db"
 D_SOFT_PATH = MATERIALS_DIR / "sem_d_soft.db"
 D_MANUAL_PATH = MATERIALS_DIR / "nicolas_llm_manual_D.md"
@@ -331,9 +331,19 @@ def compute_propagated_effects(trusted: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Build Condition D Semantic DBs from annotated Rust materials")
+    parser.add_argument(
+        "--task",
+        default="T7",
+        help="Task materials directory under materials/condition_D (default: T7)",
+    )
+    args = parser.parse_args()
+    d_dir = MATERIALS_DIR / "condition_D" / args.task.lower()
+
     print(f"Building Condition D Semantic DBs:")
     print(f"  trusted → {D_TRUSTED_PATH}")
     print(f"  soft    → {D_SOFT_PATH}")
+    print(f"  source  → {d_dir}")
 
     for path in (D_TRUSTED_PATH, D_SOFT_PATH):
         if path.exists():
@@ -345,12 +355,12 @@ def main() -> None:
     trusted.executescript(TRUSTED_SCHEMA)
     soft.executescript(SOFT_SCHEMA)
 
-    rs_files = sorted(D_DIR.glob("*.rs"))
+    rs_files = sorted(d_dir.glob("*.rs"))
     if not rs_files:
-        print(f"ERROR: no .rs files found in {D_DIR}", file=sys.stderr)
+        print(f"ERROR: no .rs files found in {d_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"\n  Parsing {len(rs_files)} annotated .rs files from {D_DIR.relative_to(HARNESS_DIR)}")
+    print(f"\n  Parsing {len(rs_files)} annotated .rs files from {d_dir.relative_to(HARNESS_DIR)}")
     for rs_path in rs_files:
         data = parse_annotations(rs_path)
         if not data["module"]:

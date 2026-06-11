@@ -1,0 +1,25 @@
+Task: Add a new `ProfileExported` audit event variant and use it when exporting a user profile.
+
+The change must be limited to these modules:
+- audit.log
+- user.profile_service
+
+Requirements:
+1. Add a new `ProfileExported` variant to `ProfileAuditAction` in `audit.log`.
+2. Do not change the signatures of `audit.log::new_event()` or `audit.log::record()`.
+3. Do not change the shape of `AuditEvent`.
+4. Add a new function to `user.profile_service`:
+   `fn export_profile(id: UserId) -> Option<UserProfile>`
+5. `export_profile` should read the profile from persistent storage and record a
+   `ProfileExported` audit event through `audit.log`.
+6. Declare the correct effects for `export_profile`. It must include `db.read`
+   and `audit.write`. Only include `reads_clock` if your implementation actually
+   calls cache functionality that reads the clock.
+7. Do not modify existing `ProfileViewed`, `ProfileUpdated`, or `UserDeactivated`
+   behavior.
+8. Before finalising, verify from the available source or tooling that the new
+   variant is compatible with the existing audit API and that the existing audit
+   function signatures remain unchanged.
+
+For each module that requires changes, output its complete updated content.
+Be precise: changing `record()` or `new_event()` is a compatibility defect.

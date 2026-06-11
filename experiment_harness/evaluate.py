@@ -131,7 +131,7 @@ def score_result(path: Path, golden: str, idx: int, total: int) -> dict | None:
 
 def main():
     parser = argparse.ArgumentParser(description="Nicolas experiment evaluator")
-    parser.add_argument("--task", required=True, choices=("T0", "T7", "E1", "E2", "E3", "E4", "E5"))
+    parser.add_argument("--task", required=True, choices=("T0", "T7", "E1", "E2", "E3", "E4", "E5", "E6"))
     parser.add_argument("--condition", choices=("A", "C", "D"), default=None,
                         help="Filter by condition (default: both)")
     parser.add_argument("--version", choices=("v2", "v3"), default=None,
