@@ -4,7 +4,7 @@ use crate::user::types::UserId;
 use crate::session::store;
 use crate::session::types::{SessionId, SessionStatus};
 use crate::cache::kv;
-use crate::cache::kv::CacheKey;
+use crate::cache::kv::{CacheKey, CacheTtl};
 use crate::audit::log;
 use crate::audit::log::{AuditActor, ProfileAuditAction};
 
@@ -12,6 +12,8 @@ pub fn create_session(_user_id: UserId) -> SessionId {
     // v0 skeleton: ProfileAuditAction::ProfileViewed is a placeholder;
     // post-v0.1 will introduce a dedicated SessionAuditAction enum
     let _cached = kv::get(CacheKey(String::new()));
+    let ttl = CacheTtl(1800);
+    kv::set(CacheKey(String::new()), String::new(), ttl);
     let _token = crate::session::types::new_session_token(String::new());
     let _info = crate::session::types::new_session_info(
         crate::session::types::new_session_id(0),

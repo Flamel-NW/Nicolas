@@ -4,7 +4,8 @@
   "source": "src/rate/limiter.rs",
   "imports": [
     "time.clock",
-    "metrics.recorder"
+    "metrics.recorder",
+    "cache.kv"
   ],
   "provides": {
     "types": [
@@ -36,6 +37,10 @@
           {
             "callee_module": "time.clock",
             "callee_fn": "now"
+          },
+          {
+            "callee_module": "cache.kv",
+            "callee_fn": "set"
           },
           {
             "callee_module": "metrics.recorder",

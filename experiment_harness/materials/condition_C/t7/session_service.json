@@ -27,6 +27,10 @@
             "callee_fn": "get"
           },
           {
+            "callee_module": "cache.kv",
+            "callee_fn": "set"
+          },
+          {
             "callee_module": "session.store",
             "callee_fn": "save_session"
           },
