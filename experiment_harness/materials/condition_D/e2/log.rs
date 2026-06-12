@@ -23,8 +23,8 @@ pub enum ProfileAuditAction {
     UserDeactivated,
 }
 
-/// A safe audit event: contains actor, action type, and subject ID.
-/// Does not carry secrets, passwords, or raw sensitive profile payloads.
+/// An audit event containing actor, action type, and the subject user ID.
+/// Does not carry secrets or sensitive profile payloads.
 pub struct AuditEvent {
     pub actor:      AuditActor,
     pub action:     ProfileAuditAction,
@@ -32,13 +32,11 @@ pub struct AuditEvent {
 }
 
 /// Construct an audit event from its components.
-pub fn new_event(_actor: AuditActor, _action: ProfileAuditAction, _subject_id: UserId) -> AuditEvent {
-    todo!()
+pub fn new_event(actor: AuditActor, action: ProfileAuditAction, subject_id: UserId) -> AuditEvent {
+    AuditEvent { actor, action, subject_id }
 }
 
-/// Record an audit event to the audit sink.
-///
-/// Effects: audit.write
+/// Record an audit event to the audit log.
 pub fn record(_event: AuditEvent) {
-    todo!()
+    todo!("audit.log::record: real implementation pending")
 }

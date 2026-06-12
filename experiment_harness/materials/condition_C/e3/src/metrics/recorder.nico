@@ -1,0 +1,83 @@
+module metrics.recorder {
+
+  spec {
+    intent "提供 metrics 写入的唯一边界。所有需要记录指标的模块均通过此接口写入，避免其他模块直接触发 metrics.write effect。record 函数将 MetricName 与 MetricValue 一并写入底层 metrics 系统。"
+
+    // 无依赖：metrics.recorder 是叶子模块，不 import 任何其他模块
+
+    interface {
+      // 公开 types
+      type MetricName    // 不透明度量名称；内部表示：String
+      type MetricValue   // f64 的 newtype wrapper；内部表示：f64
+
+      // 公开 functions
+      fn new_metric_name(raw: String) -> MetricName
+        // 纯构造函数；不读取时钟、不写入 metrics；将原始字符串封装为 MetricName
+
+      fn record(name: MetricName, value: MetricValue) -> ()
+        effects [metrics.write]
+        // 将 (name, value) 写入底层 metrics 系统；是全场景唯一 metrics.write 边界
+    }
+
+    effects [metrics.write]
+    // metrics.write：由 record 引入；new_metric_name 为纯函数，不贡献任何 effect
+  }
+
+  checks {
+    examples {
+      example record_counter {
+        // 验证：使用 record 记录一个计数器指标
+        let name = metrics.recorder.new_metric_name("http.requests.total");
+        let value = MetricValue(1.0);
+        metrics.recorder.record(name, value);
+        // 预期：无 panic；metrics.write effect 被触发
+      }
+
+      example record_gauge {
+        // 验证：使用 record 记录一个测量值（gauge）指标
+        let name = metrics.recorder.new_metric_name("memory.usage.bytes");
+        let value = MetricValue(204800.0);
+        metrics.recorder.record(name, value);
+        // 预期：无 panic；metrics.write effect 被触发
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `metrics.recorder` — metrics 写入的唯一边界模块。
+    //!
+    //! 此模块集中封装所有 metrics.write effect，使 LLM agent 可通过查询
+    //! Semantic DB 中声明了 `metrics.write` 的模块，精确定位所有指标写入路径。
+    //!
+    //! # Effects
+    //! - `metrics.write`：仅由 `record` 引入；`new_metric_name` 为纯函数。
+    //!
+    //! # Non-goals (v0 skeleton)
+    //! 当前实现为骨架（`todo!()`）。真实实现需对接底层 metrics 后端
+    //!（如 Prometheus、StatsD 等），在 `record` 中完成实际写入。
+
+    /// 不透明度量名称。内部 `String` 不对外暴露。
+    #[allow(dead_code)]
+    pub struct MetricName(String);
+
+    /// f64 的 newtype wrapper，表示一个度量值。
+    #[allow(dead_code)]
+    pub struct MetricValue(pub f64);
+
+    /// 从原始字符串构造 MetricName。纯构造函数，无任何 effects。
+    pub fn new_metric_name(raw: String) -> MetricName {
+        MetricName(raw)
+    }
+
+    /// 将指标写入底层 metrics 系统。
+    ///
+    /// # Effects
+    /// - `metrics.write`：向 metrics 后端写入 (name, value) 对。
+    pub fn record(_name: MetricName, _value: MetricValue) {
+        todo!("metrics.recorder::record: real implementation pending")
+    }
+  }
+
+}

@@ -1,0 +1,78 @@
+module time.clock {
+
+  spec {
+    intent "通过窄模块边界提供当前墙钟时间，集中承载 reads_clock effect，避免其他模块隐式读取系统时间。"
+
+    interface {
+      // 公开 types
+      type Timestamp   // 不透明时间戳，内部精度：纳秒
+      type Duration    // 时间跨度，内部精度：纳秒
+
+      // 公开 functions
+      fn now() -> Timestamp
+        effects [reads_clock]
+    }
+
+    effects [reads_clock]
+    // 无 imports：time.clock 不依赖任何其他模块
+    // 无 capabilities：reads_clock 是 effect 而非 capability（v0 区分见下）
+    // 无 contracts：v0 最小集，推迟
+  }
+
+  checks {
+    examples {
+      example basic {
+        // 验证 now() 返回值是 Timestamp 类型
+        // 对应 examples/time_clock_basic.rs（cargo test --example time_clock_basic）
+        let t = time.clock.now();
+        assert typeof(t) == Timestamp;
+      }
+    }
+    // 无 tests：业务行为验证推迟
+    // 无 rules：变更过程约束推迟
+  }
+
+  implementation rust {
+    //! `time.clock` — narrow wall-clock boundary.
+    //!
+    //! This module provides the current wall-clock time through a single
+    //! opaque interface. All `reads_clock` effects in the codebase are
+    //! intended to be funnelled through this module, so that:
+    //!
+    //! - LLM agents can find every time-reading callsite by querying the
+    //!   Semantic DB for modules that declare `reads_clock`.
+    //! - Tests and examples can substitute a controlled clock without
+    //!   modifying the modules that depend on `time.clock`.
+    //!
+    //! # Effects
+    //! - `reads_clock`: declared at module level; introduced by `now()`.
+
+    /// Opaque wall-clock timestamp (internal precision: nanoseconds).
+    ///
+    /// The internal representation is intentionally not exposed so that
+    /// downstream modules cannot construct arbitrary `Timestamp` values
+    /// without going through `now()` or a controlled test helper.
+    #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
+    pub struct Timestamp(u64);
+
+    /// A duration of time (internal precision: nanoseconds).
+    ///
+    /// Kept opaque for the same reason as `Timestamp`.
+    #[allow(dead_code)] // opaque repr: inner field is intentionally unexposed
+    pub struct Duration(u64);
+
+    /// Returns the current wall-clock time.
+    ///
+    /// # Effects
+    /// - `reads_clock`: reads the system clock.
+    ///
+    /// # Notes
+    /// This is a skeleton implementation (`todo!()`). The real
+    /// implementation will call the OS time API and return a `Timestamp`
+    /// wrapping the nanoseconds since the Unix epoch.
+    pub fn now() -> Timestamp {
+        todo!("time.clock::now: real implementation pending")
+    }
+  }
+
+}

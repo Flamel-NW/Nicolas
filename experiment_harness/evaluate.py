@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 HARNESS_DIR = Path(__file__).parent
@@ -20,6 +21,14 @@ RESULTS_DIR = HARNESS_DIR / "results"
 GOLDEN_DIR = HARNESS_DIR / "materials" / "golden_reference"
 
 SCORES = {"0": 0.0, "0.5": 0.5, "1": 1.0, "s": "skip"}
+REQUIRED_SCORED_FIELDS = (
+    "task_success",
+    "boundary_violation",
+    "auditability",
+    "notes",
+    "compile_rate",
+    "compile_rate_method",
+)
 
 
 def load_golden(task: str) -> str:
@@ -27,18 +36,62 @@ def load_golden(task: str) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else "(golden reference not found)"
 
 
-def list_results(task: str, condition: str | None, version: str | None = None) -> list[Path]:
+def result_version(path: Path, record: dict) -> str:
+    if "_v3_" in path.name or record.get("mode") == "tool_use":
+        return "v3"
+    return "v2"
+
+
+def is_fully_scored(record: dict) -> bool:
+    return all(field in record for field in REQUIRED_SCORED_FIELDS)
+
+
+def list_results(
+    task: str,
+    condition: str | None,
+    version: str | None = None,
+    batch_id: str | None = None,
+) -> list[Path]:
     cond_pat = "*" if condition is None else condition
     if version == "v3":
         pattern = f"{task}_{cond_pat}_v3_run*.json"
+        files = sorted(RESULTS_DIR.glob(pattern))
     elif version == "v2":
         # v2 results don't have _v3_ in their names
         all_files = sorted(RESULTS_DIR.glob(f"{task}_{cond_pat}_run*.json"))
-        return [f for f in all_files if "_v3_" not in f.name]
+        files = [f for f in all_files if "_v3_" not in f.name]
     else:
         # All results for this task/condition
         pattern = f"{task}_{cond_pat}_*run*.json"
-    return sorted(RESULTS_DIR.glob(pattern))
+        files = sorted(RESULTS_DIR.glob(pattern))
+
+    if batch_id is None:
+        return sorted(files)
+    filtered = []
+    for path in files:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        if rec.get("batch_id") == batch_id:
+            filtered.append(path)
+    return sorted(filtered)
+
+
+def duplicate_result_groups(files: list[Path]) -> dict[tuple, list[Path]]:
+    groups: dict[tuple, list[Path]] = {}
+    for path in files:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        key = (rec.get("task"), rec.get("condition"), result_version(path, rec), rec.get("run"))
+        groups.setdefault(key, []).append(path)
+    return {key: paths for key, paths in groups.items() if len(paths) > 1}
+
+
+def print_duplicate_error(duplicates: dict[tuple, list[Path]]) -> None:
+    print("ERROR: duplicate result candidates found for the same (task, condition, version, run).")
+    print("Specify --batch-id to select a rerun batch before listing, scoring, or summarizing.")
+    for key, paths in sorted(duplicates.items()):
+        print(f"  {key}:")
+        for path in paths:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+            print(f"    {path.name}  batch_id={rec.get('batch_id')!r}  timestamp={rec.get('timestamp')}")
 
 
 def print_separator(char="=", width=72):
@@ -119,11 +172,29 @@ def score_result(path: Path, golden: str, idx: int, total: int) -> dict | None:
 
     notes = input("Notes (optional, press Enter to skip): ").strip()
 
+    boundary_raw = ""
+    while boundary_raw not in ("0", "1", "s"):
+        boundary_raw = input("Boundary violation [0 / 1 / s=skip/unknown]: ").strip().lower()
+
+    compile_raw = ""
+    while compile_raw not in ("0", "1", "n"):
+        compile_raw = input("Compile rate [0 / 1 / n=not_run]: ").strip().lower()
+
+    if compile_raw == "n":
+        compile_rate = None
+        compile_rate_method = "not_run"
+    else:
+        compile_rate = float(compile_raw)
+        compile_rate_method = "manual"
+
     result = {
         **record,
         "task_success": score,
+        "boundary_violation": None if boundary_raw == "s" else int(boundary_raw),
         "auditability": auditable if auditable != "s" else None,
         "notes": notes or None,
+        "compile_rate": compile_rate,
+        "compile_rate_method": compile_rate_method,
     }
     print(f"  Recorded: task_success={score}\n")
     return result
@@ -137,20 +208,32 @@ def main():
     parser.add_argument("--version", choices=("v2", "v3"), default=None,
                         help="Filter by experiment version: v2 (direct) or v3 (tool_use). "
                              "Default: show all versions.")
+    parser.add_argument("--batch-id", default=None,
+                        help="Filter by result batch_id. Required when duplicate run candidates exist.")
     parser.add_argument("--list", action="store_true", help="List result files and exit")
     args = parser.parse_args()
 
-    files = list_results(args.task, args.condition, version=args.version)
+    files = list_results(args.task, args.condition, version=args.version, batch_id=args.batch_id)
     if not files:
         print(f"No result files found for task={args.task} condition={args.condition or 'any'}")
         return
+
+    duplicates = duplicate_result_groups(files)
+    if duplicates and args.batch_id is None:
+        print_duplicate_error(duplicates)
+        sys.exit(1)
 
     if args.list:
         print(f"Found {len(files)} result file(s):")
         for f in files:
             rec = json.loads(f.read_text(encoding="utf-8"))
-            scored = "task_success" in rec
-            print(f"  {f.name}  {'[scored]' if scored else '[not scored]'}")
+            if is_fully_scored(rec):
+                status = "[scored-complete]"
+            elif "task_success" in rec:
+                status = "[scored-incomplete]"
+            else:
+                status = "[not scored]"
+            print(f"  {f.name}  {status}  batch_id={rec.get('batch_id')!r}")
         return
 
     golden = load_golden(args.task)
@@ -162,10 +245,13 @@ def main():
 
     for idx, path in enumerate(files, 1):
         rec = json.loads(path.read_text(encoding="utf-8"))
-        if "task_success" in rec:
+        if is_fully_scored(rec):
             print(f"[{idx}/{total}] Already scored: {path.name} (task_success={rec['task_success']}) — skipping")
             scored_results.append(rec)
             continue
+        if "task_success" in rec:
+            missing = [field for field in REQUIRED_SCORED_FIELDS if field not in rec]
+            print(f"[{idx}/{total}] Scored but incomplete: {path.name} missing={missing} — rescoring")
 
         result = score_result(path, golden, idx, total)
         if result is None:

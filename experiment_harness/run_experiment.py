@@ -12,6 +12,10 @@ Usage:
     # v3-style multi-turn tool_use:
     python run_experiment.py --task T7 --condition C --runs 3 --mode tool_use
     python run_experiment.py --task T0 --condition A --runs 1 --mode tool_use --dry-run
+    python run_experiment.py --task E1 --condition D --runs 3 --batch-id r6-fix-YYYYMMDD
+
+E1-E6 default to tool_use mode when --mode is omitted. T0/T7 keep the
+backward-compatible direct-mode default.
 """
 
 import argparse
@@ -32,15 +36,32 @@ MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
+RESULT_SCHEMA_VERSION = "r6-fix-1"
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
 PROMPTS_DIR = HARNESS_DIR / "prompts"
 RESULTS_DIR = HARNESS_DIR / "results"
 NICOLAS_ROOT = HARNESS_DIR.parent   # Nicolas/ repo root
+SEMANTIC_DB_DIR = MATERIALS_DIR / "semantic_db"
 
 VALID_TASKS = ("T0", "T7", "E1", "E2", "E3", "E4", "E5", "E6")
 VALID_CONDITIONS = ("A", "C", "D")
+RUST_SOURCE_ALIASES = {
+    "src/audit/log.rs": "log.rs",
+    "src/cache/kv.rs": "kv.rs",
+    "src/config/loader.rs": "loader.rs",
+    "src/metrics/recorder.rs": "recorder.rs",
+    "src/rate/limiter.rs": "rate_limiter.rs",
+    "src/session/service.rs": "session_service.rs",
+    "src/session/store.rs": "session_store.rs",
+    "src/session/types.rs": "session_types.rs",
+    "src/time/clock.rs": "clock.rs",
+    "src/user/admin_service.rs": "admin_service.rs",
+    "src/user/profile_service.rs": "profile_service.rs",
+    "src/user/store.rs": "store.rs",
+    "src/user/types.rs": "types.rs",
+}
 
 # ---------------------------------------------------------------------------
 # Load .env (search from harness dir upward; finds workspace root .env)
@@ -60,6 +81,74 @@ else:
 
 def load_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def display_path(path: Path) -> str:
+    return os.path.relpath(path, HARNESS_DIR)
+
+
+def path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def is_safe_relative_request(path: Path) -> bool:
+    return not path.is_absolute() and ".." not in path.parts
+
+
+def task_materials_dir(condition: str, task: str) -> Path:
+    return MATERIALS_DIR / f"condition_{condition}" / task.lower()
+
+
+def condition_d_db_paths(task: str) -> tuple[Path, Path]:
+    db_dir = SEMANTIC_DB_DIR / "condition_D" / task.lower()
+    return db_dir / "sem_d_trusted.db", db_dir / "sem_d_soft.db"
+
+
+def result_db_paths(condition: str, task: str) -> dict[str, str]:
+    if condition == "C":
+        return {
+            "trusted": display_path(MATERIALS_DIR / "sem_trusted.db"),
+            "soft": display_path(MATERIALS_DIR / "sem_soft.db"),
+        }
+    if condition == "D":
+        trusted_path, soft_path = condition_d_db_paths(task)
+        return {
+            "trusted": display_path(trusted_path),
+            "soft": display_path(soft_path),
+        }
+    return {}
+
+
+def result_db_task(condition: str, task: str) -> str | None:
+    if condition == "C":
+        return "T7"
+    if condition == "D":
+        return task
+    return None
+
+
+def materials_scope(condition: str, task: str, mode: str) -> dict[str, str]:
+    if mode == "direct":
+        return {
+            "type": "direct_materials",
+            "materials_dir": display_path(task_materials_dir(condition, task)),
+        }
+    if condition == "C":
+        return {
+            "type": "tool_use_c",
+            "task_materials_dir": display_path(task_materials_dir(condition, task)),
+            "fallback_dir": display_path(NICOLAS_ROOT / "src"),
+        }
+    if condition in ("A", "D"):
+        return {
+            "type": f"tool_use_{condition.lower()}",
+            "materials_dir": display_path(task_materials_dir(condition, task)),
+        }
+    return {"type": "unknown"}
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +355,7 @@ def execute_tool(tool_name: str, tool_input: dict, condition: str, task: str) ->
         if condition == "C":
             return _run_sql(tool_input.get("query", "").strip())
         elif condition == "D":
-            return _run_sql_condition_D(tool_input.get("query", "").strip())
+            return _run_sql_condition_D(tool_input.get("query", "").strip(), task)
         else:
             return "Error: run_sql is not available in this condition."
 
@@ -274,21 +363,51 @@ def execute_tool(tool_name: str, tool_input: dict, condition: str, task: str) ->
         return f"Error: unknown tool '{tool_name}'"
 
 
+def available_material_files(mat_dir: Path, suffix: str) -> list[str]:
+    if not mat_dir.exists():
+        return []
+    return sorted(str(p.relative_to(mat_dir)) for p in mat_dir.rglob(f"*{suffix}") if p.is_file())
+
+
+def _read_material_file(condition: str, path: str, task: str, suffix: str) -> str:
+    p = Path(path)
+    if not is_safe_relative_request(p):
+        return f"Error: unsafe path rejected: '{path}'"
+    if p.suffix != suffix:
+        return f"Error: only {suffix} files are accessible in condition {condition} (got '{path}')"
+
+    mat_dir = task_materials_dir(condition, task)
+    candidate_paths = [mat_dir / p]
+    if p.parts and p.parts[0] == "src":
+        candidate_paths.append(mat_dir / Path(*p.parts[1:]))
+    alias = RUST_SOURCE_ALIASES.get(p.as_posix())
+    if alias:
+        candidate_paths.append(mat_dir / alias)
+    candidate_paths.append(mat_dir / p.name)
+
+    for candidate in candidate_paths:
+        if candidate.exists() and candidate.is_file() and candidate.suffix == suffix and path_is_under(candidate, mat_dir):
+            return load_text(candidate)
+
+    matches = [
+        candidate for candidate in sorted(mat_dir.rglob(p.name))
+        if candidate.is_file() and candidate.suffix == suffix and path_is_under(candidate, mat_dir)
+    ] if mat_dir.exists() else []
+    if len(matches) == 1:
+        return load_text(matches[0])
+    if len(matches) > 1:
+        rel_matches = [str(m.relative_to(mat_dir)) for m in matches]
+        return f"Error: ambiguous file name '{p.name}'. Use one of: {rel_matches}"
+
+    return (
+        f"Error: file not found: '{path}'. "
+        f"Available files: {available_material_files(mat_dir, suffix)}"
+    )
+
+
 def _read_file_condition_A(path: str, task: str) -> str:
     """Serve .rs files from materials/condition_A/{task}/."""
-    # Normalize: accept 'clock.rs', 'src/time/clock.rs', etc. → use basename
-    basename = Path(path).name
-    if not basename.endswith(".rs"):
-        return f"Error: only .rs files are accessible in condition A (got '{basename}')"
-    file_path = MATERIALS_DIR / "condition_A" / task.lower() / basename
-    if not file_path.exists():
-        available = [f.name for f in (MATERIALS_DIR / "condition_A" / task.lower()).iterdir()
-                     if f.is_file()] if (MATERIALS_DIR / "condition_A" / task.lower()).exists() else []
-        return (
-            f"Error: file not found: '{basename}'. "
-            f"Available files: {available}"
-        )
-    return load_text(file_path)
+    return _read_material_file("A", path, task, ".rs")
 
 
 def _read_file_condition_C(path: str, task: str = "") -> str:
@@ -300,6 +419,8 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
     the current production source, which may already be in the final state.
     """
     p = Path(path)
+    if not is_safe_relative_request(p):
+        return f"Error: unsafe path rejected: '{path}'"
     if p.suffix != ".nico":
         # Accept .rs paths and convert to .nico (LLM may derive path from DB source field)
         if p.suffix == ".rs":
@@ -309,25 +430,69 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
 
     # 1. Check task-specific materials directory first (experiment-prepared "before" version)
     if task:
-        mat_dir = MATERIALS_DIR / "condition_C" / task.lower()
-        for candidate in [mat_dir / p.name, mat_dir / p]:
-            if candidate.exists() and candidate.suffix == ".nico":
+        mat_dir = task_materials_dir("C", task)
+        candidate_paths = [mat_dir / p]
+        if p.parts and p.parts[0] == "src":
+            candidate_paths.append(mat_dir / Path(*p.parts[1:]))
+        candidate_paths.append(mat_dir / p.name)
+        for candidate in candidate_paths:
+            if (
+                candidate.exists()
+                and candidate.is_file()
+                and candidate.suffix == ".nico"
+                and path_is_under(candidate, mat_dir)
+            ):
                 return load_text(candidate)
 
     # 2. Fall back to Nicolas/src/ (production source)
+    src_root = NICOLAS_ROOT / "src"
     candidates = [
-        NICOLAS_ROOT / p,
-        NICOLAS_ROOT / "src" / p,
-        NICOLAS_ROOT / "src" / p.name,
+        NICOLAS_ROOT / p if p.parts and p.parts[0] == "src" else src_root / p,
+        src_root / p.name,
     ]
     for candidate in candidates:
-        if candidate.exists() and candidate.suffix == ".nico":
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.suffix == ".nico"
+            and path_is_under(candidate, src_root)
+        ):
             return load_text(candidate)
+
+    matches = [
+        candidate for candidate in sorted(src_root.rglob(p.name))
+        if candidate.is_file() and candidate.suffix == ".nico" and path_is_under(candidate, src_root)
+    ]
+    if len(matches) == 1:
+        return load_text(matches[0])
+    if len(matches) > 1:
+        rel_matches = [str(m.relative_to(src_root)) for m in matches]
+        return f"Error: ambiguous .nico file name '{p.name}'. Use one of: {rel_matches}"
 
     return (
         f"Error: .nico file not found for path '{path}'. "
         "Try a path like 'src/time/clock.nico' or 'src/user/store.nico'."
     )
+
+
+def format_sql_rows(rows: list[sqlite3.Row]) -> str:
+    if not rows:
+        return "Query returned 0 rows."
+
+    headers = list(rows[0].keys())
+    col_widths = [max(len(h), max((len(str(r[h]) if r[h] is not None else "NULL") for r in rows), default=0))
+                  for h in headers]
+    sep = "-+-".join("-" * w for w in col_widths)
+    header_line = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
+
+    lines = [header_line, sep]
+    for row in rows:
+        lines.append(" | ".join(
+            (str(row[h]) if row[h] is not None else "NULL").ljust(w)
+            for h, w in zip(headers, col_widths)
+        ))
+    lines.append(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''} returned)")
+    return "\n".join(lines)
 
 
 def _run_sql(query: str) -> str:
@@ -353,52 +518,60 @@ def _run_sql(query: str) -> str:
     except sqlite3.Error as e:
         return f"SQL Error: {e}"
 
-    if not rows:
-        return "Query returned 0 rows."
-
-    headers = list(rows[0].keys())
-    col_widths = [max(len(h), max((len(str(r[h]) if r[h] is not None else "NULL") for r in rows), default=0))
-                  for h in headers]
-    sep = "-+-".join("-" * w for w in col_widths)
-    header_line = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
-
-    lines = [header_line, sep]
-    for row in rows:
-        lines.append(" | ".join(
-            (str(row[h]) if row[h] is not None else "NULL").ljust(w)
-            for h, w in zip(headers, col_widths)
-        ))
-    lines.append(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''} returned)")
-    return "\n".join(lines)
+    return format_sql_rows(rows)
 
 
 def _read_file_condition_D(path: str, task: str) -> str:
     """Serve .rs files from materials/condition_D/{task}/."""
-    basename = Path(path).name
-    if not basename.endswith(".rs"):
-        return f"Error: only .rs files are accessible in condition D (got '{basename}')"
-    file_path = MATERIALS_DIR / "condition_D" / task.lower() / basename
-    if not file_path.exists():
-        available = [f.name for f in (MATERIALS_DIR / "condition_D" / task.lower()).iterdir()
-                     if f.is_file()] if (MATERIALS_DIR / "condition_D" / task.lower()).exists() else []
-        return (
-            f"Error: file not found: '{basename}'. "
-            f"Available files: {available}"
+    return _read_material_file("D", path, task, ".rs")
+
+
+def validate_condition_d_db(task: str) -> tuple[bool, str | None]:
+    trusted_path, soft_path = condition_d_db_paths(task)
+    if not trusted_path.exists():
+        return False, (
+            f"sem_d_trusted.db not found for task={task}. "
+            f"Run parse_condition_d.py --task {task} first. Expected: {display_path(trusted_path)}"
         )
-    return load_text(file_path)
+    if not soft_path.exists():
+        return False, (
+            f"sem_d_soft.db not found for task={task}. "
+            f"Run parse_condition_d.py --task {task} first. Expected: {display_path(soft_path)}"
+        )
+    try:
+        conn = sqlite3.connect(":memory:")
+        conn.execute(f"ATTACH DATABASE '{trusted_path}' AS trusted")
+        conn.execute(f"ATTACH DATABASE '{soft_path}' AS soft")
+        trusted_task = conn.execute("SELECT value FROM trusted.metadata WHERE key='task'").fetchone()
+        trusted_condition = conn.execute("SELECT value FROM trusted.metadata WHERE key='condition'").fetchone()
+        soft_task = conn.execute("SELECT value FROM soft.metadata WHERE key='task'").fetchone()
+        soft_condition = conn.execute("SELECT value FROM soft.metadata WHERE key='condition'").fetchone()
+        conn.close()
+    except sqlite3.Error as e:
+        return False, f"Condition D DB metadata error for task={task}: {e}"
+
+    expected_task = task.upper()
+    metadata_ok = (
+        trusted_task and trusted_task[0] == expected_task
+        and soft_task and soft_task[0] == expected_task
+        and trusted_condition and trusted_condition[0] == "D"
+        and soft_condition and soft_condition[0] == "D"
+    )
+    if not metadata_ok:
+        return False, f"Condition D DB metadata mismatch for task={task}."
+    return True, None
 
 
-def _run_sql_condition_D(query: str) -> str:
+def _run_sql_condition_D(query: str, task: str) -> str:
     """Execute a SELECT query against the Condition D Semantic DB."""
     if not query.upper().startswith("SELECT"):
         return "Error: only SELECT queries are allowed."
 
-    trusted_path = MATERIALS_DIR / "sem_d_trusted.db"
-    soft_path = MATERIALS_DIR / "sem_d_soft.db"
-    if not trusted_path.exists():
-        return "Error: sem_d_trusted.db not found. Run parse_condition_d.py first."
-    if not soft_path.exists():
-        return "Error: sem_d_soft.db not found. Run parse_condition_d.py first."
+    ok, error = validate_condition_d_db(task)
+    if not ok:
+        return f"Error: {error}"
+
+    trusted_path, soft_path = condition_d_db_paths(task)
 
     try:
         conn = sqlite3.connect(":memory:")
@@ -411,23 +584,7 @@ def _run_sql_condition_D(query: str) -> str:
     except sqlite3.Error as e:
         return f"SQL Error: {e}"
 
-    if not rows:
-        return "Query returned 0 rows."
-
-    headers = list(rows[0].keys())
-    col_widths = [max(len(h), max((len(str(r[h]) if r[h] is not None else "NULL") for r in rows), default=0))
-                  for h in headers]
-    sep = "-+-".join("-" * w for w in col_widths)
-    header_line = " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
-
-    lines = [header_line, sep]
-    for row in rows:
-        lines.append(" | ".join(
-            (str(row[h]) if row[h] is not None else "NULL").ljust(w)
-            for h, w in zip(headers, col_widths)
-        ))
-    lines.append(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''} returned)")
-    return "\n".join(lines)
+    return format_sql_rows(rows)
 
 
 def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
@@ -561,8 +718,11 @@ def main():
                         help="Number of runs (default 3)")
     parser.add_argument("--model", default=MODEL,
                         help=f"Anthropic model (default: {MODEL})")
-    parser.add_argument("--mode", choices=("direct", "tool_use"), default="direct",
-                        help="'direct': single-turn v2 mode; 'tool_use': multi-turn v3 mode")
+    parser.add_argument("--mode", choices=("direct", "tool_use"), default=None,
+                        help="'direct': single-turn v2 mode; 'tool_use': multi-turn v3 mode. "
+                             "Default: tool_use for E1-E6, direct for T0/T7.")
+    parser.add_argument("--batch-id", default=None,
+                        help="Optional batch identifier written to result JSON for rerun grouping.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print prompts without calling the API")
     args = parser.parse_args()
@@ -570,7 +730,7 @@ def main():
     task = args.task
     condition = args.condition
     model = args.model
-    mode = args.mode
+    mode = args.mode or ("tool_use" if task.startswith("E") else "direct")
 
     RESULTS_DIR.mkdir(exist_ok=True)
 
@@ -606,12 +766,19 @@ def main():
             result = run_direct(client, system_prompt, user_message, run_num, dry_run=False)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             record = {
+                "result_schema_version": RESULT_SCHEMA_VERSION,
                 "task": task,
                 "condition": condition,
                 "run": run_num,
+                "batch_id": args.batch_id,
                 "model": model,
                 "temperature": TEMPERATURE,
+                "max_tokens": MAX_TOKENS,
+                "max_turns": None,
                 "mode": "direct",
+                "db_task": result_db_task(condition, task),
+                "db_paths": result_db_paths(condition, task),
+                "materials_scope": materials_scope(condition, task, mode),
                 "materials": [f for f, _ in materials],
                 "input_tokens": result["input_tokens"],
                 "output_tokens": result["output_tokens"],
@@ -639,11 +806,18 @@ def main():
         task_prompt = load_text(task_prompt_path).strip()
 
         manual_tokens_per_turn = load_manual_tokens(condition) if condition in ("C", "D") else 0
+        if condition == "D":
+            ok, error = validate_condition_d_db(task)
+            if not ok:
+                print(f"Error: {error}", file=sys.stderr)
+                sys.exit(1)
 
         print(f"\nExperiment: task={task}  condition={condition}  runs={args.runs}  "
               f"model={model}  mode=tool_use")
         if condition in ("C", "D"):
             print(f"Manual overhead: {manual_tokens_per_turn} tokens/turn")
+        if condition in ("C", "D"):
+            print(f"DB paths: {result_db_paths(condition, task)}")
 
         if args.dry_run:
             run_tool_use(None, system_prompt, task_prompt, task, condition,
@@ -665,12 +839,19 @@ def main():
             )
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             record = {
+                "result_schema_version": RESULT_SCHEMA_VERSION,
                 "task": task,
                 "condition": condition,
                 "run": run_num,
+                "batch_id": args.batch_id,
                 "model": model,
                 "temperature": TEMPERATURE,
+                "max_tokens": MAX_TOKENS,
+                "max_turns": MAX_TURNS,
                 "mode": "tool_use",
+                "db_task": result_db_task(condition, task),
+                "db_paths": result_db_paths(condition, task),
+                "materials_scope": materials_scope(condition, task, mode),
                 # Token fields — three accounting layers
                 "input_tokens": result["input_tokens"],           # Layer 1: billing total (all turns summed)
                 "output_tokens": result["output_tokens"],

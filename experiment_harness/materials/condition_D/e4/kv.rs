@@ -35,6 +35,10 @@ pub fn new_ttl(secs: u64) -> CacheTtl {
 
 /// Look up a cache entry by key.
 ///
+/// Reads the current wall-clock time via `time.clock::now()` to check
+/// whether the stored entry has passed its TTL. Returns `None` if the key
+/// is absent or the entry has expired.
+///
 /// # Effects
 /// - `reads_clock`: reads system time to evaluate TTL expiry.
 pub fn get(_key: CacheKey) -> Option<String> {
@@ -43,6 +47,9 @@ pub fn get(_key: CacheKey) -> Option<String> {
 }
 
 /// Insert or overwrite a cache entry with the given TTL.
+///
+/// Records the current wall-clock time via `time.clock::now()` alongside
+/// the value so that `get` can compute the absolute expiry instant.
 ///
 /// # Effects
 /// - `reads_clock`: reads system time to record the insertion timestamp.

@@ -1,0 +1,58 @@
+module session.store {
+
+  spec {
+    intent "提供 session 数据的持久化读写边界。session.store 是整个场景中唯一直接操作持久化存储的 session 模块，集中承载 db.read 和 db.write effects。上层模块通过 import session.store 使用持久化操作，不得绕过此边界直接访问存储层。"
+
+    imports [session.types]
+
+    interface {
+      fn load_session(id: SessionId) -> Option
+        effects [db.read]
+
+      fn save_session(info: SessionInfo) -> ()
+        effects [db.write]
+
+      fn revoke_session(id: SessionId) -> ()
+        effects [db.read, db.write]
+    }
+
+    effects [db.read, db.write]
+  }
+
+  checks {
+    examples {
+      example load_existing_session {
+        let id     = session.types.new_session_id(1);
+        let result = session.store.load_session(id);
+        assert result.is_some();
+      }
+
+      example save_new_session {
+        let id    = session.types.new_session_id(42);
+        let uid   = user.types.new_user_id(7);
+        let token = session.types.new_session_token("tok-abc123");
+        let info  = session.types.new_session_info(id, uid, token, SessionStatus::Active);
+        session.store.save_session(info);
+        let loaded = session.store.load_session(session.types.new_session_id(42));
+        assert loaded.is_some();
+      }
+    }
+  }
+
+  implementation rust {
+    use super::types::{SessionId, SessionInfo};
+
+    pub fn load_session(_id: SessionId) -> Option<SessionInfo> {
+        todo!("session.store::load_session: real implementation pending")
+    }
+
+    pub fn save_session(_info: SessionInfo) {
+        todo!("session.store::save_session: real implementation pending")
+    }
+
+    pub fn revoke_session(_id: SessionId) {
+        todo!("session.store::revoke_session: real implementation pending")
+    }
+  }
+
+}

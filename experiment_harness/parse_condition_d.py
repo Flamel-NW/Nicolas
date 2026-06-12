@@ -34,17 +34,19 @@ import os
 import sqlite3
 import sys
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv, find_dotenv
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
-D_TRUSTED_PATH = MATERIALS_DIR / "sem_d_trusted.db"
-D_SOFT_PATH = MATERIALS_DIR / "sem_d_soft.db"
+SEMANTIC_DB_DIR = MATERIALS_DIR / "semantic_db"
+CONDITION_D_DB_ROOT = SEMANTIC_DB_DIR / "condition_D"
 D_MANUAL_PATH = MATERIALS_DIR / "nicolas_llm_manual_D.md"
 D_MANUAL_TOKENS_PATH = MATERIALS_DIR / "manual_tokens_D.json"
 MODEL = "claude-sonnet-4-5"
+DB_SCHEMA_VERSION = "0.1.0-draft-D-task-scoped"
 
 dotenv_path = find_dotenv(usecwd=False, raise_error_if_not_found=False)
 if dotenv_path:
@@ -115,6 +117,11 @@ CREATE TABLE IF NOT EXISTS call_graph (
     callee_module TEXT NOT NULL,
     callee_fn     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 SOFT_SCHEMA = """
@@ -122,6 +129,11 @@ CREATE TABLE IF NOT EXISTS module_intent (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     module_name TEXT NOT NULL UNIQUE,
     intent      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -273,6 +285,13 @@ def insert_module(trusted: sqlite3.Connection, soft: sqlite3.Connection, data: d
         )
 
 
+def insert_metadata(conn: sqlite3.Connection, metadata: dict[str, str]) -> None:
+    conn.executemany(
+        "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+        sorted(metadata.items()),
+    )
+
+
 # ---------------------------------------------------------------------------
 # propagated_effects (identical logic to build_db.py)
 # ---------------------------------------------------------------------------
@@ -338,27 +357,38 @@ def main() -> None:
         help="Task materials directory under materials/condition_D (default: T7)",
     )
     args = parser.parse_args()
-    d_dir = MATERIALS_DIR / "condition_D" / args.task.lower()
+    task_id = args.task.upper()
+    task_key = args.task.lower()
+    d_dir = MATERIALS_DIR / "condition_D" / task_key
+    rs_files = sorted(d_dir.glob("*.rs")) if d_dir.exists() else []
+
+    if not d_dir.exists():
+        print(f"ERROR: task materials directory not found: {d_dir}", file=sys.stderr)
+        sys.exit(1)
+    if not rs_files:
+        print(f"ERROR: no .rs files found in {d_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    db_dir = CONDITION_D_DB_ROOT / task_key
+    trusted_path = db_dir / "sem_d_trusted.db"
+    soft_path = db_dir / "sem_d_soft.db"
 
     print(f"Building Condition D Semantic DBs:")
-    print(f"  trusted → {D_TRUSTED_PATH}")
-    print(f"  soft    → {D_SOFT_PATH}")
+    print(f"  trusted → {trusted_path}")
+    print(f"  soft    → {soft_path}")
     print(f"  source  → {d_dir}")
 
-    for path in (D_TRUSTED_PATH, D_SOFT_PATH):
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    for path in (trusted_path, soft_path):
         if path.exists():
             path.unlink()
             print(f"  Removed existing {path.name}")
 
-    trusted = sqlite3.connect(str(D_TRUSTED_PATH))
-    soft = sqlite3.connect(str(D_SOFT_PATH))
+    trusted = sqlite3.connect(str(trusted_path))
+    soft = sqlite3.connect(str(soft_path))
     trusted.executescript(TRUSTED_SCHEMA)
     soft.executescript(SOFT_SCHEMA)
-
-    rs_files = sorted(d_dir.glob("*.rs"))
-    if not rs_files:
-        print(f"ERROR: no .rs files found in {d_dir}", file=sys.stderr)
-        sys.exit(1)
 
     print(f"\n  Parsing {len(rs_files)} annotated .rs files from {d_dir.relative_to(HARNESS_DIR)}")
     for rs_path in rs_files:
@@ -372,19 +402,31 @@ def main() -> None:
     print("\n  Computing propagated_effects...")
     compute_propagated_effects(trusted)
 
+    metadata = {
+        "condition": "D",
+        "task": task_id,
+        "source_dir": str(d_dir.relative_to(HARNESS_DIR)),
+        "schema_version": DB_SCHEMA_VERSION,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    insert_metadata(trusted, metadata)
+    insert_metadata(soft, metadata)
+
     trusted.commit()
     soft.commit()
 
     # Row counts
     print("\n  sem_d_trusted.db row counts:")
     for table in ["modules", "imports", "types", "functions", "effects", "examples",
-                  "propagated_effects", "call_graph"]:
+                  "propagated_effects", "call_graph", "metadata"]:
         count = trusted.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         print(f"    {table:25s}: {count} rows")
 
     print("\n  sem_d_soft.db row counts:")
     count = soft.execute("SELECT COUNT(*) FROM module_intent").fetchone()[0]
     print(f"    {'module_intent':25s}: {count} rows")
+    metadata_count = soft.execute("SELECT COUNT(*) FROM metadata").fetchone()[0]
+    print(f"    {'metadata':25s}: {metadata_count} rows")
 
     # Validation
     print("\n  [Validation] call_graph (all edges):")
@@ -405,7 +447,7 @@ def main() -> None:
 
     trusted.close()
     soft.close()
-    print(f"\n  sem_d_trusted.db and sem_d_soft.db written to {MATERIALS_DIR.relative_to(HARNESS_DIR)}/")
+    print(f"\n  sem_d_trusted.db and sem_d_soft.db written to {db_dir.relative_to(HARNESS_DIR)}/")
 
     # Manual token count for condition D
     if not D_MANUAL_PATH.exists():
