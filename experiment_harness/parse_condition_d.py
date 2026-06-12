@@ -31,6 +31,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import defaultdict, deque
@@ -47,6 +48,25 @@ D_MANUAL_PATH = MATERIALS_DIR / "nicolas_llm_manual_D.md"
 D_MANUAL_TOKENS_PATH = MATERIALS_DIR / "manual_tokens_D.json"
 MODEL = "claude-sonnet-4-5"
 DB_SCHEMA_VERSION = "0.1.0-draft-D-task-scoped"
+VALID_TASKS = ("T7", "E1", "E2", "E3", "E4", "E5", "E6")
+SEMANTIC_IMPORT_MODULES = {
+    "audit.log",
+    "cache.kv",
+    "metrics.recorder",
+    "session.store",
+    "time.clock",
+    "user.store",
+    "user.types",
+}
+IGNORED_SIGNATURE_TYPES = {
+    "Option",
+    "Result",
+    "String",
+    "Vec",
+    "bool",
+    "str",
+    "u64",
+}
 
 dotenv_path = find_dotenv(usecwd=False, raise_error_if_not_found=False)
 if dotenv_path:
@@ -228,6 +248,70 @@ def parse_annotations(rs_path: Path) -> dict:
     return data
 
 
+def source_module_from_crate_path(first: str, second: str) -> str:
+    return f"{first}.{second}"
+
+
+def source_imports(rs_text: str, current_module: str) -> set[str]:
+    imports: set[str] = set()
+    for match in re.finditer(r"^\s*use\s+crate::([A-Za-z_]\w*)::([A-Za-z_]\w*)", rs_text, re.MULTILINE):
+        imports.add(source_module_from_crate_path(match.group(1), match.group(2)))
+
+    parent = current_module.rsplit(".", 1)[0] if "." in current_module else ""
+    if parent:
+        for match in re.finditer(r"^\s*use\s+super::([A-Za-z_]\w*)", rs_text, re.MULTILINE):
+            imports.add(f"{parent}.{match.group(1)}")
+
+    return imports
+
+
+def actual_function_signatures(rs_text: str) -> dict[str, str]:
+    signatures: dict[str, str] = {}
+    pattern = re.compile(r"\bpub\s+fn\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:->\s*[^{\n]+)?")
+    for match in pattern.finditer(rs_text):
+        signatures[match.group(1)] = " ".join(match.group(0).split())
+    return signatures
+
+
+def signature_type_names(signature: str) -> set[str]:
+    names = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", signature))
+    return {name for name in names if name not in IGNORED_SIGNATURE_TYPES}
+
+
+def validate_annotations(rs_path: Path, data: dict) -> list[str]:
+    """Return annotation/source consistency errors for one annotated Rust file."""
+    errors: list[str] = []
+    rs_text = rs_path.read_text(encoding="utf-8")
+    module = data.get("module") or "<missing-module>"
+
+    for type_data in data.get("types", []):
+        name = type_data["name"]
+        if not re.search(rf"\b(struct|enum|type)\s+{re.escape(name)}\b", rs_text):
+            errors.append(f"{rs_path.name}: @nico-type {name!r} does not match any Rust type declaration")
+
+    actual_fns = actual_function_signatures(rs_text)
+    for fn_data in data.get("functions", []):
+        name = fn_data["name"]
+        actual_sig = actual_fns.get(name)
+        if actual_sig is None:
+            errors.append(f"{rs_path.name}: @nico-fn {name!r} does not match any pub fn")
+            continue
+        for type_name in signature_type_names(fn_data.get("signature") or ""):
+            if type_name not in actual_sig:
+                errors.append(
+                    f"{rs_path.name}: @nico-fn {name!r} signature mentions {type_name!r}, "
+                    "but the Rust signature no longer does"
+                )
+
+    annotated_imports = set(data.get("imports", []))
+    material_imports = source_imports(rs_text, module) & SEMANTIC_IMPORT_MODULES
+    missing_imports = sorted(material_imports - annotated_imports)
+    for missing in missing_imports:
+        errors.append(f"{rs_path.name}: Rust source imports {missing!r}, but @nico-imports omits it")
+
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # DB population
 # ---------------------------------------------------------------------------
@@ -359,6 +443,10 @@ def main() -> None:
     args = parser.parse_args()
     task_id = args.task.upper()
     task_key = args.task.lower()
+    if task_id not in VALID_TASKS:
+        print(f"ERROR: invalid task {args.task!r}; expected one of: {', '.join(VALID_TASKS)}", file=sys.stderr)
+        sys.exit(1)
+
     d_dir = MATERIALS_DIR / "condition_D" / task_key
     rs_files = sorted(d_dir.glob("*.rs")) if d_dir.exists() else []
 
@@ -367,6 +455,22 @@ def main() -> None:
         sys.exit(1)
     if not rs_files:
         print(f"ERROR: no .rs files found in {d_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    parsed_modules: list[tuple[Path, dict]] = []
+    validation_errors: list[str] = []
+    for rs_path in rs_files:
+        data = parse_annotations(rs_path)
+        if not data["module"]:
+            print(f"  WARNING: no @nico-module annotation found in {rs_path.name}, skipping.")
+            continue
+        validation_errors.extend(validate_annotations(rs_path, data))
+        parsed_modules.append((rs_path, data))
+
+    if validation_errors:
+        print("ERROR: Condition D annotation/source validation failed:", file=sys.stderr)
+        for error in validation_errors:
+            print(f"  - {error}", file=sys.stderr)
         sys.exit(1)
 
     db_dir = CONDITION_D_DB_ROOT / task_key
@@ -390,12 +494,8 @@ def main() -> None:
     trusted.executescript(TRUSTED_SCHEMA)
     soft.executescript(SOFT_SCHEMA)
 
-    print(f"\n  Parsing {len(rs_files)} annotated .rs files from {d_dir.relative_to(HARNESS_DIR)}")
-    for rs_path in rs_files:
-        data = parse_annotations(rs_path)
-        if not data["module"]:
-            print(f"  WARNING: no @nico-module annotation found in {rs_path.name}, skipping.")
-            continue
+    print(f"\n  Parsing {len(parsed_modules)} annotated .rs files from {d_dir.relative_to(HARNESS_DIR)}")
+    for rs_path, data in parsed_modules:
         insert_module(trusted, soft, data)
         print(f"    {rs_path.name}  →  module={data['module']}")
 

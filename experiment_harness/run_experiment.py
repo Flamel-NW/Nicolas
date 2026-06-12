@@ -36,7 +36,7 @@ MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
-RESULT_SCHEMA_VERSION = "r6-fix-1"
+RESULT_SCHEMA_VERSION = "r6-fix-2"
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
@@ -131,6 +131,14 @@ def result_db_task(condition: str, task: str) -> str | None:
     return None
 
 
+def result_db_scope(condition: str, task: str) -> str | None:
+    if condition == "C":
+        return "project_semantic_db_t7"
+    if condition == "D":
+        return f"task_scoped_condition_d:{task}"
+    return None
+
+
 def materials_scope(condition: str, task: str, mode: str) -> dict[str, str]:
     if mode == "direct":
         return {
@@ -138,10 +146,17 @@ def materials_scope(condition: str, task: str, mode: str) -> dict[str, str]:
             "materials_dir": display_path(task_materials_dir(condition, task)),
         }
     if condition == "C":
+        mat_dir = task_materials_dir(condition, task)
+        task_specific_files = available_material_files(mat_dir, ".nico")
         return {
             "type": "tool_use_c",
             "task_materials_dir": display_path(task_materials_dir(condition, task)),
             "fallback_dir": display_path(NICOLAS_ROOT / "src"),
+            "fallback_policy": (
+                "disabled_when_task_specific_nico_materials_exist"
+                if task_specific_files else
+                "enabled_for_legacy_tasks_without_task_specific_nico_materials"
+            ),
         }
     if condition in ("A", "D"):
         return {
@@ -172,7 +187,7 @@ def build_user_message(task_prompt: str, materials: list[tuple[str, str]]) -> st
 
 
 def run_direct(client: anthropic.Anthropic, system: str, user: str,
-               run_num: int, dry_run: bool) -> dict:
+               run_num: int, dry_run: bool, model: str) -> dict:
     if dry_run:
         print(f"\n{'='*60}")
         print(f"[DRY RUN] System prompt:\n{system}")
@@ -182,7 +197,7 @@ def run_direct(client: anthropic.Anthropic, system: str, user: str,
 
     print(f"  Run {run_num}: calling API...", end="", flush=True)
     response = client.messages.create(
-        model=MODEL,
+        model=model,
         max_tokens=MAX_TOKENS,
         temperature=TEMPERATURE,
         system=system,
@@ -431,6 +446,7 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
     # 1. Check task-specific materials directory first (experiment-prepared "before" version)
     if task:
         mat_dir = task_materials_dir("C", task)
+        task_specific_files = available_material_files(mat_dir, ".nico")
         candidate_paths = [mat_dir / p]
         if p.parts and p.parts[0] == "src":
             candidate_paths.append(mat_dir / Path(*p.parts[1:]))
@@ -443,6 +459,11 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
                 and path_is_under(candidate, mat_dir)
             ):
                 return load_text(candidate)
+        if task_specific_files:
+            return (
+                f"Error: .nico file not found in task-specific condition C materials for task {task}: "
+                f"'{path}'. Available files: {task_specific_files}"
+            )
 
     # 2. Fall back to Nicolas/src/ (production source)
     src_root = NICOLAS_ROOT / "src"
@@ -589,7 +610,7 @@ def _run_sql_condition_D(query: str, task: str) -> str:
 
 def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
                  task: str, condition: str, run_num: int, dry_run: bool,
-                 manual_tokens_per_turn: int) -> dict:
+                 manual_tokens_per_turn: int, model: str) -> dict:
     """Run a single experiment in multi-turn tool_use mode."""
     tools = get_tools(condition)
     messages = [{"role": "user", "content": task_prompt}]
@@ -612,7 +633,7 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
 
     while turns < MAX_TURNS:
         response = client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=MAX_TOKENS,
             temperature=TEMPERATURE,
             system=system,
@@ -753,7 +774,7 @@ def main():
         user_message = build_user_message(task_prompt, materials)
 
         if args.dry_run:
-            run_direct(None, system_prompt, user_message, 1, dry_run=True)
+            run_direct(None, system_prompt, user_message, 1, dry_run=True, model=model)
             return
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -763,7 +784,7 @@ def main():
         client = anthropic.Anthropic(api_key=api_key)
 
         for run_num in range(1, args.runs + 1):
-            result = run_direct(client, system_prompt, user_message, run_num, dry_run=False)
+            result = run_direct(client, system_prompt, user_message, run_num, dry_run=False, model=model)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             record = {
                 "result_schema_version": RESULT_SCHEMA_VERSION,
@@ -777,6 +798,7 @@ def main():
                 "max_turns": None,
                 "mode": "direct",
                 "db_task": result_db_task(condition, task),
+                "db_scope": result_db_scope(condition, task),
                 "db_paths": result_db_paths(condition, task),
                 "materials_scope": materials_scope(condition, task, mode),
                 "materials": [f for f, _ in materials],
@@ -784,6 +806,13 @@ def main():
                 "output_tokens": result["output_tokens"],
                 "response": result["response"],
                 "timestamp": timestamp,
+                "scoring_status": "unscored",
+                "task_success": None,
+                "boundary_violation": None,
+                "auditability": None,
+                "notes": None,
+                "compile_rate": None,
+                "compile_rate_method": "not_run",
             }
             out_path = RESULTS_DIR / f"{task}_{condition}_run{run_num:02d}_{timestamp}.json"
             out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -821,7 +850,7 @@ def main():
 
         if args.dry_run:
             run_tool_use(None, system_prompt, task_prompt, task, condition,
-                         1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn)
+                         1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn, model=model)
             return
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -836,6 +865,7 @@ def main():
                 task, condition, run_num,
                 dry_run=False,
                 manual_tokens_per_turn=manual_tokens_per_turn,
+                model=model,
             )
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             record = {
@@ -850,6 +880,7 @@ def main():
                 "max_turns": MAX_TURNS,
                 "mode": "tool_use",
                 "db_task": result_db_task(condition, task),
+                "db_scope": result_db_scope(condition, task),
                 "db_paths": result_db_paths(condition, task),
                 "materials_scope": materials_scope(condition, task, mode),
                 # Token fields — three accounting layers
@@ -868,6 +899,13 @@ def main():
                 # Response
                 "response": result["response"],
                 "timestamp": timestamp,
+                "scoring_status": "unscored",
+                "task_success": None,
+                "boundary_violation": None,
+                "auditability": None,
+                "notes": None,
+                "compile_rate": None,
+                "compile_rate_method": "not_run",
             }
             out_path = RESULTS_DIR / f"{task}_{condition}_v3_run{run_num:02d}_{timestamp}.json"
             out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")

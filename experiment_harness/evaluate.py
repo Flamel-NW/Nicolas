@@ -43,7 +43,16 @@ def result_version(path: Path, record: dict) -> str:
 
 
 def is_fully_scored(record: dict) -> bool:
-    return all(field in record for field in REQUIRED_SCORED_FIELDS)
+    if record.get("scoring_status") == "unscored":
+        return False
+    if not all(field in record for field in REQUIRED_SCORED_FIELDS):
+        return False
+    return (
+        record.get("task_success") is not None
+        and record.get("boundary_violation") is not None
+        and record.get("auditability") is not None
+        and record.get("compile_rate_method") is not None
+    )
 
 
 def list_results(
@@ -189,6 +198,7 @@ def score_result(path: Path, golden: str, idx: int, total: int) -> dict | None:
 
     result = {
         **record,
+        "scoring_status": "scored",
         "task_success": score,
         "boundary_violation": None if boundary_raw == "s" else int(boundary_raw),
         "auditability": auditable if auditable != "s" else None,
@@ -227,7 +237,9 @@ def main():
         print(f"Found {len(files)} result file(s):")
         for f in files:
             rec = json.loads(f.read_text(encoding="utf-8"))
-            if is_fully_scored(rec):
+            if rec.get("scoring_status") == "unscored":
+                status = "[not scored]"
+            elif is_fully_scored(rec):
                 status = "[scored-complete]"
             elif "task_success" in rec:
                 status = "[scored-incomplete]"

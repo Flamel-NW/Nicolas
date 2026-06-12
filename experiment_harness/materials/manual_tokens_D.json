@@ -1,5 +1,5 @@
 {
   "manual_file": "nicolas_llm_manual_D.md",
-  "manual_tokens_per_turn": 949,
+  "manual_tokens_per_turn": 1068,
   "note": "Tokens contributed by the Condition D LLM Manual to each API call's input_tokens when used as the system prompt."
 }

@@ -21,6 +21,16 @@ A `.nico` file contains three top-level sections:
 - `checks` — rules that validate code changes to this module
 - `implementation rust` — the Rust implementation body
 
+## Effect Propagation Rule
+
+Nicolas module-level effects propagate through imports. If module `A` imports
+module `B`, then `A` must include every module-level effect declared by `B` in
+`A`'s own module-level effects. This rule also applies when the import is used
+only for a type, because the dependency is still part of the module boundary.
+When a change adds, removes, or changes an import, recompute the propagated
+effects for every module that directly or transitively imports the changed
+module.
+
 ## Semantic DB Schema (SQLite)
 
 The Semantic DB exposes two schemas via SQL prefix:

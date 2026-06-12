@@ -4,7 +4,7 @@ Requirements:
 1. Update `UserProfile` to include the new field, and update `new_profile` to accept it as a parameter.
 2. Update `user.store` so that its persistence interface correctly handles the new field in both load and save operations.
 3. Decide whether `audit.log`'s `AuditEvent` requires updating for this change. Justify your decision based on the module's intent.
-4. Identify all modules whose declared effects may need updating as a result of this change, and explain your reasoning.
+4. Identify all modules whose declared effects may need updating as a result of this change, and explain your reasoning under the Nicolas import-effect propagation rule.
 5. Do not introduce dependency directions that violate the module architecture.
 
 For each module that requires changes, output its complete updated content.
