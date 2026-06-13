@@ -97,6 +97,64 @@ class TaskWorkspaceTest(unittest.TestCase):
         baseline = self.materials / "condition_C/e1/src/user/types.nico"
         self.assertEqual(baseline.read_text(encoding="utf-8"), "module user.types { nested }\n")
 
+    def test_condition_c_read_file_maps_rs_source_paths_in_workspace(self) -> None:
+        self.write(
+            "experiment_harness/materials/condition_C/e1/src/cache/kv.nico",
+            "module cache.kv { spec { intent \"x\" } checks { } implementation rust { fn demo() {} } }\n",
+        )
+        workspace = task_workspace.prepare_task_workspace(
+            "E1", "C", "E1_C_v3_run01_20260613T000003Z", None, self.workspace_root
+        )
+
+        content = run_experiment._read_file_condition_C("src/cache/kv.rs", "E1", workspace=workspace)
+
+        self.assertIn("module cache.kv", content)
+
+    def test_condition_c_read_nico_section_uses_workspace_and_rs_mapping(self) -> None:
+        self.write(
+            "experiment_harness/materials/condition_C/e1/src/cache/kv.nico",
+            """
+module cache.kv {
+  spec { intent "x" }
+  checks { examples { example demo { let value = "{ not a brace }"; } } }
+  implementation rust {
+    pub fn demo() {
+      let text = format!("{:?}", "{ not a brace }");
+    }
+  }
+}
+""".lstrip(),
+        )
+        workspace = task_workspace.prepare_task_workspace(
+            "E1", "C", "E1_C_v3_run01_20260613T000004Z", None, self.workspace_root
+        )
+
+        surface = run_experiment._read_nico_section_condition_C(
+            "src/cache/kv.rs", "surface", "E1", workspace=workspace
+        )
+        implementation = run_experiment._read_nico_section_condition_C(
+            "src/cache/kv.rs", "implementation", "E1", workspace=workspace
+        )
+
+        self.assertIn("section: surface", surface)
+        self.assertIn('spec { intent "x" }', surface)
+        self.assertIn("section: implementation", implementation)
+        self.assertIn('format!("{:?}"', implementation)
+
+    def test_c_only_tools_are_unavailable_in_other_conditions(self) -> None:
+        self.assertIn(
+            "only available in condition C",
+            run_experiment.execute_tool(
+                "semantic_query", {"query": "module_surface", "module": "cache.kv"}, "A", "E1"
+            ),
+        )
+        self.assertIn(
+            "only available in condition C",
+            run_experiment.execute_tool(
+                "read_nico_section", {"path": "src/cache/kv.nico", "section": "surface"}, "D", "E1"
+            ),
+        )
+
     def test_compute_changeset_records_added_modified_and_deleted(self) -> None:
         self.write("experiment_harness/materials/condition_C/e1/a.nico", "old a\n")
         self.write("experiment_harness/materials/condition_C/e1/b.nico", "old b\n")

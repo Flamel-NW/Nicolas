@@ -1,0 +1,496 @@
+"""
+High-level Semantic DB query helpers for condition C experiments.
+
+All outputs are mechanical summaries of trusted tables. These helpers do not
+read soft semantic content and do not infer facts beyond graph traversal.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from collections import defaultdict, deque
+from pathlib import Path
+from typing import Any
+
+
+VALID_QUERIES = {
+    "module_surface",
+    "module_dependents",
+    "type_dependents",
+    "function_callers",
+    "effect_chain",
+}
+
+
+class SemanticQueryError(ValueError):
+    """Raised when a semantic query request is invalid."""
+
+
+def run_semantic_query(params: dict[str, Any], trusted_path: Path) -> str:
+    query = str(params.get("query", "")).strip()
+    if query not in VALID_QUERIES:
+        allowed = ", ".join(sorted(VALID_QUERIES))
+        return f"Error: unknown semantic query '{query}'. Expected one of: {allowed}"
+    if not trusted_path.exists():
+        return f"Error: sem_trusted.db not found: {trusted_path}"
+
+    try:
+        with _connect(trusted_path) as conn:
+            if query == "module_surface":
+                return _module_surface(conn, _required(params, "module"))
+            if query == "module_dependents":
+                return _module_dependents(
+                    conn,
+                    _required(params, "module"),
+                    transitive=_as_bool(params.get("transitive"), default=True),
+                )
+            if query == "type_dependents":
+                return _type_dependents(
+                    conn,
+                    _required(params, "type_name"),
+                    module=_optional(params, "module"),
+                    transitive=_as_bool(params.get("transitive"), default=True),
+                )
+            if query == "function_callers":
+                return _function_callers(
+                    conn,
+                    _required(params, "module"),
+                    _required(params, "function"),
+                    transitive=_as_bool(params.get("transitive"), default=False),
+                )
+            if query == "effect_chain":
+                return _effect_chain(
+                    conn,
+                    _required(params, "module"),
+                    function=_optional(params, "function"),
+                    effect=_optional(params, "effect"),
+                )
+    except (SemanticQueryError, sqlite3.Error) as e:
+        return f"Error: {e}"
+
+    return f"Error: unhandled semantic query '{query}'"
+
+
+def _connect(trusted_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(trusted_path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _required(params: dict[str, Any], key: str) -> str:
+    value = str(params.get(key, "")).strip()
+    if not value:
+        raise SemanticQueryError(f"missing required parameter '{key}'")
+    return value
+
+
+def _optional(params: dict[str, Any], key: str) -> str | None:
+    value = params.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return default
+
+
+def _module_exists(conn: sqlite3.Connection, module: str) -> bool:
+    return conn.execute("SELECT 1 FROM modules WHERE name=?", (module,)).fetchone() is not None
+
+
+def _function_exists(conn: sqlite3.Connection, module: str, function: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM functions WHERE module_name=? AND name=?",
+        (module, function),
+    ).fetchone() is not None
+
+
+def _module_candidates(conn: sqlite3.Connection) -> list[str]:
+    return [row["name"] for row in conn.execute("SELECT name FROM modules ORDER BY name")]
+
+
+def _ensure_module(conn: sqlite3.Connection, module: str) -> None:
+    if not _module_exists(conn, module):
+        raise SemanticQueryError(
+            f"module '{module}' not found. Available modules: {_module_candidates(conn)}"
+        )
+
+
+def _module_surface(conn: sqlite3.Connection, module: str) -> str:
+    _ensure_module(conn, module)
+    module_row = conn.execute(
+        "SELECT name, source, schema_version FROM modules WHERE name=?",
+        (module,),
+    ).fetchone()
+    imports = _column(conn, "SELECT imported_module FROM imports WHERE module_name=? ORDER BY imported_module", module)
+    types = conn.execute(
+        "SELECT name, visibility, repr FROM types WHERE module_name=? ORDER BY name",
+        (module,),
+    ).fetchall()
+    functions = conn.execute(
+        "SELECT name, signature, visibility FROM functions WHERE module_name=? ORDER BY name",
+        (module,),
+    ).fetchall()
+    function_effect_rows = conn.execute(
+        "SELECT function_name, effect FROM effects "
+        "WHERE module_name=? AND scope='function' ORDER BY function_name, effect",
+        (module,),
+    ).fetchall()
+    function_effects = _group_rows(function_effect_rows, "function_name", "effect")
+    module_effects = _column(
+        conn,
+        "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+        module,
+    )
+    propagated = conn.execute(
+        "SELECT effect, source_module, depth FROM propagated_effects "
+        "WHERE module_name=? ORDER BY depth, effect, source_module",
+        (module,),
+    ).fetchall()
+    examples = conn.execute(
+        "SELECT example_id, path FROM examples WHERE module_name=? ORDER BY example_id",
+        (module,),
+    ).fetchall()
+
+    lines = [
+        f"module: {module_row['name']}",
+        f"source: {module_row['source']}",
+        f"schema_version: {module_row['schema_version']}",
+        f"imports: {_compact_list(imports)}",
+        "types:",
+    ]
+    lines.extend(
+        f"- {row['name']} ({_compact_list([row['visibility'], row['repr']])})"
+        for row in types
+    )
+    if not types:
+        lines.append("- none")
+
+    lines.append("functions:")
+    for row in functions:
+        effects = function_effects.get(row["name"], [])
+        lines.append(f"- {row['signature']} | effects={_compact_list(effects)}")
+    if not functions:
+        lines.append("- none")
+
+    lines.append(f"module_effects: {_compact_list(module_effects)}")
+    lines.append("propagated_effects:")
+    lines.extend(
+        f"- {row['effect']} <- {row['source_module']} depth={row['depth']}"
+        for row in propagated
+    )
+    if not propagated:
+        lines.append("- none")
+
+    lines.append("examples:")
+    lines.extend(f"- {row['example_id']} -> {row['path']}" for row in examples)
+    if not examples:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
+def _module_dependents(conn: sqlite3.Connection, module: str, transitive: bool) -> str:
+    _ensure_module(conn, module)
+    rows = _reverse_import_paths(conn, module, transitive=transitive)
+    lines = [
+        f"module_dependents: {module}",
+        f"transitive: {str(transitive).lower()}",
+    ]
+    if not rows:
+        lines.append("dependents: none")
+        return "\n".join(lines)
+    lines.append("dependents:")
+    lines.extend(
+        f"- {row['module']} depth={row['depth']} path={' -> '.join(row['path'])}"
+        for row in rows
+    )
+    return "\n".join(lines)
+
+
+def _type_dependents(
+    conn: sqlite3.Connection,
+    type_name: str,
+    module: str | None,
+    transitive: bool,
+) -> str:
+    if module:
+        rows = conn.execute(
+            "SELECT module_name, name FROM types WHERE module_name=? AND name=? ORDER BY module_name",
+            (module, type_name),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT module_name, name FROM types WHERE name=? ORDER BY module_name",
+            (type_name,),
+        ).fetchall()
+    if not rows:
+        return f"Error: type '{type_name}' not found"
+    if len(rows) > 1:
+        providers = [row["module_name"] for row in rows]
+        return f"Error: type '{type_name}' is ambiguous. Provide module. Candidates: {providers}"
+
+    provider = rows[0]["module_name"]
+    dependent_rows = _reverse_import_paths(conn, provider, transitive=transitive)
+    lines = [
+        f"type: {provider}.{type_name}",
+        f"transitive: {str(transitive).lower()}",
+        "dependents:",
+    ]
+    if dependent_rows:
+        lines.extend(
+            f"- {row['module']} depth={row['depth']} path={' -> '.join(row['path'])}"
+            for row in dependent_rows
+        )
+    else:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
+def _function_callers(conn: sqlite3.Connection, module: str, function: str, transitive: bool) -> str:
+    _ensure_module(conn, module)
+    if not _function_exists(conn, module, function):
+        return f"Error: function '{module}.{function}' not found"
+
+    paths = _reverse_call_paths(conn, module, function, transitive=transitive)
+    lines = [
+        f"function_callers: {module}.{function}",
+        f"transitive: {str(transitive).lower()}",
+    ]
+    if not paths:
+        lines.append("callers: none")
+        return "\n".join(lines)
+    lines.append("callers:")
+    lines.extend(
+        f"- {row['caller']} depth={row['depth']} path={' -> '.join(row['path'])}"
+        for row in paths
+    )
+    return "\n".join(lines)
+
+
+def _effect_chain(
+    conn: sqlite3.Connection,
+    module: str,
+    function: str | None,
+    effect: str | None,
+) -> str:
+    _ensure_module(conn, module)
+    if function and not _function_exists(conn, module, function):
+        return f"Error: function '{module}.{function}' not found"
+
+    lines = [
+        "effect_chain:",
+        f"module: {module}",
+    ]
+    if function:
+        lines.append(f"function: {function}")
+    if effect:
+        lines.append(f"effect_filter: {effect}")
+
+    module_effects = _filtered_effects(
+        conn,
+        "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+        (module,),
+        effect,
+    )
+    propagated = conn.execute(
+        "SELECT effect, source_module, depth FROM propagated_effects "
+        "WHERE module_name=? ORDER BY depth, effect, source_module",
+        (module,),
+    ).fetchall()
+    if effect:
+        propagated = [row for row in propagated if row["effect"] == effect]
+
+    lines.append(f"module_effects: {_compact_list(module_effects)}")
+    lines.append("propagated_effects:")
+    if propagated:
+        lines.extend(
+            f"- {row['effect']} <- {row['source_module']} depth={row['depth']}"
+            for row in propagated
+        )
+    else:
+        lines.append("- none")
+
+    if function:
+        direct_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND function_name=? ORDER BY effect",
+            (module, function),
+            effect,
+        )
+        lines.append(f"direct_function_effects: {_compact_list(direct_effects)}")
+        call_rows = _forward_call_paths(conn, module, function, effect)
+        lines.append("call_paths:")
+        if call_rows:
+            lines.extend(
+                f"- {' -> '.join(row['path'])} | callee_effects={_compact_list(row['effects'])}"
+                for row in call_rows
+            )
+        else:
+            lines.append("- none")
+    else:
+        fn_rows = conn.execute(
+            "SELECT name FROM functions WHERE module_name=? ORDER BY name",
+            (module,),
+        ).fetchall()
+        lines.append("function_effects:")
+        found = False
+        for row in fn_rows:
+            effects = _filtered_effects(
+                conn,
+                "SELECT effect FROM effects WHERE module_name=? AND function_name=? ORDER BY effect",
+                (module, row["name"]),
+                effect,
+            )
+            if effect and not effects:
+                continue
+            lines.append(f"- {module}.{row['name']}: {_compact_list(effects)}")
+            found = True
+        if not found:
+            lines.append("- none")
+    return "\n".join(lines)
+
+
+def _column(conn: sqlite3.Connection, sql: str, *params: str) -> list[str]:
+    return [row[0] for row in conn.execute(sql, params).fetchall()]
+
+
+def _group_rows(rows: list[sqlite3.Row], key_col: str, value_col: str) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for row in rows:
+        grouped[row[key_col]].append(row[value_col])
+    return dict(grouped)
+
+
+def _compact_list(values: list[Any]) -> str:
+    cleaned = [str(value) for value in values if value is not None and str(value)]
+    return ", ".join(cleaned) if cleaned else "none"
+
+
+def _reverse_import_paths(
+    conn: sqlite3.Connection,
+    target: str,
+    transitive: bool,
+) -> list[dict[str, Any]]:
+    reverse: dict[str, list[str]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT module_name, imported_module FROM imports ORDER BY module_name, imported_module"
+    ):
+        reverse[row["imported_module"]].append(row["module_name"])
+
+    queue = deque((importer, 1, [importer, target]) for importer in reverse.get(target, []))
+    seen: set[str] = set()
+    results: list[dict[str, Any]] = []
+    while queue:
+        module, depth, path = queue.popleft()
+        if module in seen:
+            continue
+        seen.add(module)
+        results.append({"module": module, "depth": depth, "path": path})
+        if not transitive:
+            continue
+        for importer in reverse.get(module, []):
+            if importer not in seen:
+                queue.append((importer, depth + 1, [importer] + path))
+    return sorted(results, key=lambda item: (item["depth"], item["module"]))
+
+
+def _reverse_call_paths(
+    conn: sqlite3.Connection,
+    module: str,
+    function: str,
+    transitive: bool,
+) -> list[dict[str, Any]]:
+    reverse: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT caller_module, caller_fn, callee_module, callee_fn FROM call_graph "
+        "ORDER BY caller_module, caller_fn, callee_module, callee_fn"
+    ):
+        reverse[(row["callee_module"], row["callee_fn"])].append((row["caller_module"], row["caller_fn"]))
+
+    target_label = _fn_label(module, function)
+    queue = deque(
+        (caller_module, caller_fn, 1, [_fn_label(caller_module, caller_fn), target_label])
+        for caller_module, caller_fn in reverse.get((module, function), [])
+    )
+    seen: set[tuple[str, str]] = set()
+    results: list[dict[str, Any]] = []
+    while queue:
+        caller_module, caller_fn, depth, path = queue.popleft()
+        key = (caller_module, caller_fn)
+        if key in seen:
+            continue
+        seen.add(key)
+        caller_label = _fn_label(caller_module, caller_fn)
+        results.append({"caller": caller_label, "depth": depth, "path": path})
+        if not transitive:
+            continue
+        for next_module, next_fn in reverse.get(key, []):
+            if (next_module, next_fn) not in seen:
+                queue.append((next_module, next_fn, depth + 1, [_fn_label(next_module, next_fn)] + path))
+    return sorted(results, key=lambda item: (item["depth"], item["caller"]))
+
+
+def _forward_call_paths(
+    conn: sqlite3.Connection,
+    module: str,
+    function: str,
+    effect_filter: str | None,
+) -> list[dict[str, Any]]:
+    forward: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT caller_module, caller_fn, callee_module, callee_fn FROM call_graph "
+        "ORDER BY caller_module, caller_fn, callee_module, callee_fn"
+    ):
+        forward[(row["caller_module"], row["caller_fn"])].append((row["callee_module"], row["callee_fn"]))
+
+    root = (module, function)
+    root_label = _fn_label(module, function)
+    queue = deque((callee_module, callee_fn, [root_label, _fn_label(callee_module, callee_fn)])
+                  for callee_module, callee_fn in forward.get(root, []))
+    seen: set[tuple[str, str]] = set()
+    results: list[dict[str, Any]] = []
+    while queue:
+        callee_module, callee_fn, path = queue.popleft()
+        key = (callee_module, callee_fn)
+        if key in seen:
+            continue
+        seen.add(key)
+        effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND function_name=? ORDER BY effect",
+            (callee_module, callee_fn),
+            effect_filter,
+        )
+        if not effect_filter or effects:
+            results.append({"path": path, "effects": effects})
+        for next_module, next_fn in forward.get(key, []):
+            if (next_module, next_fn) not in seen:
+                queue.append((next_module, next_fn, path + [_fn_label(next_module, next_fn)]))
+    return results
+
+
+def _filtered_effects(
+    conn: sqlite3.Connection,
+    sql: str,
+    params: tuple[str, ...],
+    effect_filter: str | None,
+) -> list[str]:
+    effects = [row[0] for row in conn.execute(sql, params).fetchall()]
+    if effect_filter:
+        effects = [effect for effect in effects if effect == effect_filter]
+    return effects
+
+
+def _fn_label(module: str, function: str) -> str:
+    return f"{module}.{function}"

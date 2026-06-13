@@ -29,6 +29,8 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv, find_dotenv
 
+from nico_sections import NicoSectionError, extract_nico_section
+from semantic_queries import run_semantic_query
 from task_workspace import (
     TaskWorkspace,
     WorkspaceError,
@@ -281,8 +283,10 @@ def get_tools(condition: str) -> list[dict]:
     read_file_C = {
         "name": "read_file",
         "description": (
-            "Read a Nicolas source file (.nico) by path relative to the project root "
+            "Last-resort full-file fallback: read an entire Nicolas source file (.nico) "
+            "by path relative to the project root "
             "(e.g. 'src/time/clock.nico', 'src/user/store.nico', 'src/cache/kv.nico'). "
+            "Prefer semantic_query for trusted structure and read_nico_section for partial source reads. "
             "Only .nico files are accessible."
         ),
         "input_schema": {
@@ -310,6 +314,76 @@ def get_tools(condition: str) -> list[dict]:
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "A SELECT SQL query."}
+            },
+            "required": ["query"],
+        },
+    }
+    read_nico_section = {
+        "name": "read_nico_section",
+        "description": (
+            "Read one section from a Nicolas source file without loading the full file. "
+            "Use surface for the full spec block, checks for the checks block, and "
+            "implementation for the implementation rust block. Accepts .nico paths and "
+            "DB source paths ending in .rs by mapping them to .nico."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the .nico file, or a DB source path ending in .rs.",
+                },
+                "section": {
+                    "type": "string",
+                    "enum": ["surface", "checks", "implementation"],
+                    "description": "The source section to read.",
+                },
+            },
+            "required": ["path", "section"],
+        },
+    }
+    semantic_query = {
+        "name": "semantic_query",
+        "description": (
+            "Run a compact high-level query over trusted Nicolas Semantic DB facts. "
+            "Use this before SQL for common structure, dependency, caller, and effect-chain lookups. "
+            "Supported query values: module_surface, module_dependents, type_dependents, "
+            "function_callers, effect_chain."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "enum": [
+                        "module_surface",
+                        "module_dependents",
+                        "type_dependents",
+                        "function_callers",
+                        "effect_chain",
+                    ],
+                    "description": "Which high-level trusted query to run.",
+                },
+                "module": {
+                    "type": "string",
+                    "description": "Module name, e.g. cache.kv or user.profile_service.",
+                },
+                "function": {
+                    "type": "string",
+                    "description": "Function name for function_callers or effect_chain.",
+                },
+                "type_name": {
+                    "type": "string",
+                    "description": "Type name for type_dependents, e.g. UserProfile.",
+                },
+                "effect": {
+                    "type": "string",
+                    "description": "Optional effect filter for effect_chain, e.g. reads_clock.",
+                },
+                "transitive": {
+                    "type": "boolean",
+                    "description": "Whether graph queries should include transitive paths.",
+                },
             },
             "required": ["query"],
         },
@@ -356,7 +430,7 @@ def get_tools(condition: str) -> list[dict]:
     if condition == "A":
         return [read_file_A]
     elif condition == "C":
-        return [run_sql, read_file_C]
+        return [semantic_query, read_nico_section, run_sql, read_file_C]
     elif condition == "D":
         return [run_sql_D, read_file_D]
     else:
@@ -389,6 +463,21 @@ def execute_tool(
             return _run_sql_condition_D(tool_input.get("query", "").strip(), task)
         else:
             return "Error: run_sql is not available in this condition."
+
+    elif tool_name == "read_nico_section":
+        if condition == "C":
+            return _read_nico_section_condition_C(
+                tool_input.get("path", "").strip(),
+                tool_input.get("section", "").strip(),
+                task,
+                workspace=workspace,
+            )
+        return "Error: read_nico_section is only available in condition C."
+
+    elif tool_name == "semantic_query":
+        if condition == "C":
+            return _semantic_query_condition_C(tool_input)
+        return "Error: semantic_query is only available in condition C."
 
     else:
         return f"Error: unknown tool '{tool_name}'"
@@ -449,21 +538,50 @@ def _read_file_condition_C(path: str, task: str = "", workspace: TaskWorkspace |
     .nico files (e.g. clock.nico with microseconds for T0) are served instead of
     the current production source, which may already be in the final state.
     """
-    if workspace is not None:
-        try:
-            return load_text(resolve_workspace_file(workspace, path, suffix=".nico"))
-        except (WorkspaceError, FileNotFoundError) as e:
-            return f"Error: {e}"
+    try:
+        return load_text(_resolve_condition_c_nico_path(path, task, workspace=workspace))
+    except (WorkspaceError, FileNotFoundError) as e:
+        return f"Error: {e}"
 
-    p = Path(path)
+
+def _read_nico_section_condition_C(
+    path: str,
+    section: str,
+    task: str = "",
+    workspace: TaskWorkspace | None = None,
+) -> str:
+    try:
+        source_path = _resolve_condition_c_nico_path(path, task, workspace=workspace)
+        section_text = extract_nico_section(load_text(source_path), section)
+    except (WorkspaceError, FileNotFoundError, NicoSectionError) as e:
+        return f"Error: {e}"
+    return f"path: {display_path(source_path)}\nsection: {section}\n\n{section_text}"
+
+
+def _semantic_query_condition_C(tool_input: dict) -> str:
+    return run_semantic_query(tool_input, MATERIALS_DIR / "sem_trusted.db")
+
+
+def _normalize_condition_c_nico_request(path: str) -> Path:
+    p = Path(path.strip())
     if not is_safe_relative_request(p):
-        return f"Error: unsafe path rejected: '{path}'"
-    if p.suffix != ".nico":
-        # Accept .rs paths and convert to .nico (LLM may derive path from DB source field)
-        if p.suffix == ".rs":
-            p = p.with_suffix(".nico")
-        else:
-            return f"Error: only .nico files are accessible in condition C (got '{path}')"
+        raise WorkspaceError(f"unsafe path rejected: '{path}'")
+    if p.suffix == ".rs":
+        p = p.with_suffix(".nico")
+    elif p.suffix != ".nico":
+        raise WorkspaceError(f"only .nico files are accessible in condition C (got '{path}')")
+    return p
+
+
+def _resolve_condition_c_nico_path(
+    path: str,
+    task: str = "",
+    workspace: TaskWorkspace | None = None,
+) -> Path:
+    p = _normalize_condition_c_nico_request(path)
+
+    if workspace is not None:
+        return resolve_workspace_file(workspace, p.as_posix(), suffix=".nico")
 
     # 1. Check task-specific materials directory first (experiment-prepared "before" version)
     if task:
@@ -480,10 +598,10 @@ def _read_file_condition_C(path: str, task: str = "", workspace: TaskWorkspace |
                 and candidate.suffix == ".nico"
                 and path_is_under(candidate, mat_dir)
             ):
-                return load_text(candidate)
+                return candidate
         if task_specific_files:
-            return (
-                f"Error: .nico file not found in task-specific condition C materials for task {task}: "
+            raise FileNotFoundError(
+                f".nico file not found in task-specific condition C materials for task {task}: "
                 f"'{path}'. Available files: {task_specific_files}"
             )
 
@@ -500,20 +618,20 @@ def _read_file_condition_C(path: str, task: str = "", workspace: TaskWorkspace |
             and candidate.suffix == ".nico"
             and path_is_under(candidate, src_root)
         ):
-            return load_text(candidate)
+            return candidate
 
     matches = [
         candidate for candidate in sorted(src_root.rglob(p.name))
         if candidate.is_file() and candidate.suffix == ".nico" and path_is_under(candidate, src_root)
     ]
     if len(matches) == 1:
-        return load_text(matches[0])
+        return matches[0]
     if len(matches) > 1:
         rel_matches = [str(m.relative_to(src_root)) for m in matches]
-        return f"Error: ambiguous .nico file name '{p.name}'. Use one of: {rel_matches}"
+        raise WorkspaceError(f"ambiguous .nico file name '{p.name}'. Use one of: {rel_matches}")
 
-    return (
-        f"Error: .nico file not found for path '{path}'. "
+    raise FileNotFoundError(
+        f".nico file not found for path '{path}'. "
         "Try a path like 'src/time/clock.nico' or 'src/user/store.nico'."
     )
 

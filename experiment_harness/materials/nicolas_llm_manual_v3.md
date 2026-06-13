@@ -72,11 +72,28 @@ chains, or public APIs, query `trusted.*` tables first. The `trusted.*` schema
 is the single source of truth for these facts. You do not need to open `.nico`
 files to verify what the DB reports.
 
-Use `read_file` only when you need the full implementation body or example
-code that is not captured in the DB.
+Prefer `semantic_query` for common trusted lookups before writing custom SQL:
+module surfaces, reverse dependencies, type dependents, callers, and effect
+chains. Use `run_sql` only when you need a custom SELECT query not covered by
+`semantic_query`.
+
+Prefer `read_nico_section` when you need source text that is not captured in
+the DB. Read only the needed section:
+
+- `surface` — the full `spec { ... }` block
+- `checks` — the full `checks { ... }` block
+- `implementation` — the full `implementation rust { ... }` block
+
+Use `read_file` only as a last-resort full-file fallback when a section-level
+read is insufficient.
 
 ## Available Tools
 
+- `semantic_query(query, ...)` — compact trusted lookups for module surface,
+  module dependents, type dependents, function callers, and effect chains
+- `read_nico_section(path, section)` — read one section of a `.nico` source
+  file; `section` is `surface`, `checks`, or `implementation`
 - `run_sql(query)` — execute a SELECT statement against the Semantic DB
-- `read_file(path)` — read a `.nico` source file; provide the path relative to
-  the project root, e.g. `src/time/clock.nico` or `src/user/store.nico`
+- `read_file(path)` — last-resort full `.nico` file read; provide the path
+  relative to the project root, e.g. `src/time/clock.nico` or
+  `src/user/store.nico`
