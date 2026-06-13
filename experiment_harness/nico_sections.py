@@ -21,16 +21,8 @@ class NicoSectionError(ValueError):
     """Raised when a requested `.nico` section cannot be extracted."""
 
 
-def extract_nico_section(source: str, section: str) -> str:
-    """Return one top-level `.nico` section from source text.
-
-    Supported sections:
-      - surface: the full `spec { ... }` block
-      - checks: the full `checks { ... }` block
-      - implementation: the full `implementation rust { ... }` block
-
-    Braces inside strings and comments are ignored while matching block bounds.
-    """
+def extract_nico_section_span(source: str, section: str) -> tuple[int, int]:
+    """Return the character-offset span for one top-level `.nico` section."""
     pattern = SECTION_PATTERNS.get(section)
     if pattern is None:
         allowed = ", ".join(sorted(SECTION_PATTERNS))
@@ -49,7 +41,21 @@ def extract_nico_section(source: str, section: str) -> str:
     if close_brace < 0:
         raise NicoSectionError(f"section '{section}' has no matching closing brace")
 
-    return source[match.start():close_brace + 1].strip()
+    return match.start(), close_brace + 1
+
+
+def extract_nico_section(source: str, section: str) -> str:
+    """Return one top-level `.nico` section from source text.
+
+    Supported sections:
+      - surface: the full `spec { ... }` block
+      - checks: the full `checks { ... }` block
+      - implementation: the full `implementation rust { ... }` block
+
+    Braces inside strings and comments are ignored while matching block bounds.
+    """
+    start, end = extract_nico_section_span(source, section)
+    return source[start:end].strip()
 
 
 def find_matching_brace(masked_source: str, open_brace: int) -> int:

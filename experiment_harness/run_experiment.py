@@ -29,6 +29,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv, find_dotenv
 
+from nico_edits import apply_nico_edits
 from nico_sections import NicoSectionError, extract_nico_section
 from semantic_queries import run_semantic_query
 from task_workspace import (
@@ -388,6 +389,73 @@ def get_tools(condition: str) -> list[dict]:
             "required": ["query"],
         },
     }
+    edit_nico = {
+        "name": "edit_nico",
+        "description": (
+            "Apply exact-anchor structured edits to a Nicolas .nico source file in the "
+            "condition C task workspace. Use this to make small audited source changes "
+            "instead of rewriting complete modules in the final answer. Supports these "
+            "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
+            "replace_identifier. Each edit is scoped to surface, checks, implementation, "
+            "or file. The entire edit batch is atomic: any failed anchor/count check "
+            "leaves the file unchanged."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the workspace .nico file, e.g. src/user/types.nico.",
+                },
+                "edits": {
+                    "type": "array",
+                    "description": "Ordered exact-anchor edits to apply atomically.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {
+                                "type": "string",
+                                "enum": [
+                                    "replace_text",
+                                    "insert_before",
+                                    "insert_after",
+                                    "insert_before_section_end",
+                                    "replace_identifier",
+                                ],
+                            },
+                            "section": {
+                                "type": "string",
+                                "enum": ["surface", "checks", "implementation", "file"],
+                                "description": "Source section to edit; file is allowed only for replacement ops.",
+                            },
+                            "target": {
+                                "type": "string",
+                                "description": "Exact anchor text or identifier to match.",
+                            },
+                            "replacement": {
+                                "type": "string",
+                                "description": "Replacement text for replace_text or replace_identifier.",
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": "Text to insert for insertion ops.",
+                            },
+                            "expected_count": {
+                                "type": "integer",
+                                "description": "Required match count for target-based ops; defaults to 1.",
+                            },
+                        },
+                        "required": ["op", "section"],
+                    },
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "If true, preview the diff without writing the workspace file.",
+                },
+            },
+            "required": ["path", "edits"],
+        },
+    }
 
     read_file_D = {
         "name": "read_file",
@@ -430,7 +498,7 @@ def get_tools(condition: str) -> list[dict]:
     if condition == "A":
         return [read_file_A]
     elif condition == "C":
-        return [semantic_query, read_nico_section, run_sql, read_file_C]
+        return [semantic_query, read_nico_section, edit_nico, run_sql, read_file_C]
     elif condition == "D":
         return [run_sql_D, read_file_D]
     else:
@@ -478,6 +546,11 @@ def execute_tool(
         if condition == "C":
             return _semantic_query_condition_C(tool_input)
         return "Error: semantic_query is only available in condition C."
+
+    elif tool_name == "edit_nico":
+        if condition == "C":
+            return _edit_nico_condition_C(tool_input, workspace=workspace)
+        return "Error: edit_nico is only available in condition C."
 
     else:
         return f"Error: unknown tool '{tool_name}'"
@@ -560,6 +633,18 @@ def _read_nico_section_condition_C(
 
 def _semantic_query_condition_C(tool_input: dict) -> str:
     return run_semantic_query(tool_input, MATERIALS_DIR / "sem_trusted.db")
+
+
+def _edit_nico_condition_C(tool_input: dict, workspace: TaskWorkspace | None = None) -> str:
+    dry_run = tool_input.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        dry_run = str(dry_run).strip().lower() in {"1", "true", "yes", "y"}
+    return apply_nico_edits(
+        workspace,
+        str(tool_input.get("path", "")).strip(),
+        tool_input.get("edits", []),
+        dry_run=dry_run,
+    )
 
 
 def _normalize_condition_c_nico_request(path: str) -> Path:
