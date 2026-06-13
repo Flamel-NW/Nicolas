@@ -19,6 +19,7 @@ from pathlib import Path
 HARNESS_DIR = Path(__file__).parent
 RESULTS_DIR = HARNESS_DIR / "results"
 GOLDEN_DIR = HARNESS_DIR / "materials" / "golden_reference"
+CHANGESET_FILENAME = "changeset.json"
 
 SCORES = {"0": 0.0, "0.5": 0.5, "1": 1.0, "s": "skip"}
 REQUIRED_SCORED_FIELDS = (
@@ -130,6 +131,171 @@ def print_tool_calls(record: dict) -> None:
         print(f"       → {preview[:120]}")
 
 
+def build_scoring_input_from_record(record: dict) -> dict:
+    """Return the evaluator-facing scoring context for old and new result JSON."""
+    existing = record.get("scoring_input")
+    if isinstance(existing, dict):
+        return existing
+
+    workspace_record = record.get("workspace") if isinstance(record.get("workspace"), dict) else None
+    changeset = record.get("workspace_changeset")
+    if not isinstance(changeset, dict) and workspace_record:
+        changeset = workspace_record.get("changeset")
+    if not isinstance(changeset, dict) and workspace_record:
+        changeset = load_workspace_changeset(workspace_record)
+
+    write_tool_calls = record.get("write_tool_calls")
+    if not isinstance(write_tool_calls, list):
+        write_tool_calls = fallback_write_tool_calls(record.get("tool_calls") or [])
+
+    validation_summary = record.get("validation_summary")
+    if not isinstance(validation_summary, dict):
+        validation_summary = None
+
+    return {
+        "schema": "evaluator-fallback-scoring-input-v1",
+        "final_answer": record.get("response", ""),
+        "workspace_path": workspace_record.get("path") if workspace_record else None,
+        "changed_files": changeset.get("changed_files", []) if isinstance(changeset, dict) else [],
+        "changeset_summary": changeset.get("summary") if isinstance(changeset, dict) else None,
+        "compact_diffs": changeset.get("diffs", []) if isinstance(changeset, dict) else [],
+        "write_tool_calls": write_tool_calls,
+        "validation_summary": validation_summary,
+    }
+
+
+def load_workspace_changeset(workspace_record: dict) -> dict | None:
+    workspace_path = workspace_record.get("path")
+    if not workspace_path:
+        return None
+    path = Path(workspace_path)
+    if not path.is_absolute():
+        path = HARNESS_DIR / path
+    changeset_path = path / CHANGESET_FILENAME
+    if not changeset_path.exists():
+        return None
+    try:
+        return json.loads(changeset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def fallback_write_tool_calls(tool_calls: list[dict]) -> list[dict]:
+    write_calls = []
+    for index, call in enumerate(tool_calls, start=1):
+        if call.get("tool") != "edit_nico":
+            continue
+        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
+        output = str(call.get("full_output", ""))
+        parsed = parse_tool_output_header(output)
+        edits = tool_input.get("edits")
+        status = parsed.get("status")
+        if status is None:
+            status = "error" if output.startswith("Error:") else "unknown"
+        write_calls.append({
+            "call_index": index,
+            "turn": call.get("turn"),
+            "path": parsed.get("path") or tool_input.get("path"),
+            "dry_run": truthy_tool_input(tool_input.get("dry_run", False)),
+            "edit_count": len(edits) if isinstance(edits, list) else None,
+            "result_status": status,
+            "diff_truncated": parse_bool(parsed.get("diff_truncated")),
+            "output_preview": call.get("output_preview", output[:300]),
+        })
+    return write_calls
+
+
+def parse_tool_output_header(output: str) -> dict[str, str]:
+    parsed = {}
+    for line in output.splitlines():
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key in {"status", "path", "diff_truncated"}:
+            parsed[key] = value.strip()
+    return parsed
+
+
+def parse_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y"}:
+        return True
+    if lowered in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def truthy_tool_input(value: object) -> bool:
+    parsed = parse_bool(value)
+    return False if parsed is None else parsed
+
+
+def print_scoring_context(record: dict) -> None:
+    scoring_input = build_scoring_input_from_record(record)
+    workspace_path = scoring_input.get("workspace_path")
+    changed_files = scoring_input.get("changed_files") or []
+    write_tool_calls = scoring_input.get("write_tool_calls") or []
+    compact_diffs = scoring_input.get("compact_diffs") or []
+    validation_summary = scoring_input.get("validation_summary")
+    changeset_summary = scoring_input.get("changeset_summary")
+
+    if not any([workspace_path, changed_files, write_tool_calls, compact_diffs, validation_summary]):
+        return
+
+    print_separator("-")
+    print("SCORING INPUT / WORKSPACE AUDIT:")
+    if workspace_path:
+        print(f"Workspace: {workspace_path}")
+    if changeset_summary is not None:
+        print(f"Changeset summary: {changeset_summary}")
+    if changed_files:
+        print(f"Changed files: {', '.join(changed_files)}")
+    else:
+        print("Changed files: (none)")
+
+    print("\nWRITE TOOL CALLS:")
+    if write_tool_calls:
+        for call in write_tool_calls:
+            print(
+                f"  [{call.get('call_index', '?')}] turn={call.get('turn', '?')} "
+                f"status={call.get('result_status')} path={call.get('path')} "
+                f"edits={call.get('edit_count')} dry_run={call.get('dry_run')} "
+                f"diff_truncated={call.get('diff_truncated')}"
+            )
+            preview = str(call.get("output_preview") or "")
+            if preview:
+                print(f"       -> {preview[:160]}")
+    else:
+        print("  (none)")
+
+    if compact_diffs:
+        print("\nCOMPACT DIFFS:")
+        for diff in compact_diffs:
+            path = diff.get("path", "?")
+            status = diff.get("status", "?")
+            truncated = diff.get("diff_truncated")
+            print_separator(".")
+            print(f"{path}  status={status}  diff_truncated={truncated}")
+            print(diff.get("diff") or "(no textual diff)")
+
+    if validation_summary:
+        print("\nVALIDATION SUMMARY:")
+        for key, value in validation_summary.items():
+            if key == "warnings":
+                continue
+            print(f"  {key}: {value}")
+        warnings = validation_summary.get("warnings") or []
+        if warnings:
+            print("  warnings:")
+            for warning in warnings:
+                print(f"    - {warning}")
+
+
 def score_result(path: Path, golden: str, idx: int, total: int) -> dict | None:
     record = json.loads(path.read_text(encoding="utf-8"))
     task = record["task"]
@@ -151,6 +317,7 @@ def score_result(path: Path, golden: str, idx: int, total: int) -> dict | None:
               f"({task_input_tok} task + {manual_overhead} manual overhead)  "
               f"true_task={true_tok}  Output: {output_tok}  Turns: {record.get('turns', '?')}")
         print_tool_calls(record)
+        print_scoring_context(record)
     else:
         print(f"Input tokens: {input_tok}   Output tokens: {output_tok}")
     print_separator("-")

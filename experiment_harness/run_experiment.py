@@ -48,7 +48,7 @@ MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
-RESULT_SCHEMA_VERSION = "t3-workspace-1"
+RESULT_SCHEMA_VERSION = "t3-scoring-input-1"
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
@@ -572,6 +572,137 @@ def execute_tool(
         return f"Error: unknown tool '{tool_name}'"
 
 
+def summarize_write_tool_calls(tool_calls: list[dict]) -> list[dict]:
+    """Return a compact, auditable summary of edit_nico calls."""
+    write_calls = []
+    for index, call in enumerate(tool_calls, start=1):
+        if call.get("tool") != "edit_nico":
+            continue
+        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
+        output = str(call.get("full_output", ""))
+        parsed = _parse_tool_output_header(output)
+        edits = tool_input.get("edits")
+        result_status = parsed.get("status")
+        if result_status is None:
+            result_status = "error" if output.startswith("Error:") else "unknown"
+        output_preview = call.get("output_preview")
+        if output_preview is None:
+            output_preview = output[:300] + ("..." if len(output) > 300 else "")
+        write_calls.append({
+            "call_index": index,
+            "turn": call.get("turn"),
+            "path": parsed.get("path") or tool_input.get("path"),
+            "dry_run": _truthy_tool_input(tool_input.get("dry_run", False)),
+            "edit_count": len(edits) if isinstance(edits, list) else None,
+            "result_status": result_status,
+            "diff_truncated": _parse_bool(parsed.get("diff_truncated")),
+            "output_preview": output_preview,
+        })
+    return write_calls
+
+
+def build_validation_summary(
+    workspace: TaskWorkspace | None,
+    changeset: dict | None,
+    write_tool_calls: list[dict],
+) -> dict | None:
+    """Build mechanical validation metadata for scoring/audit.
+
+    This summary intentionally does not claim compile/test success.
+    """
+    if workspace is None and changeset is None and not write_tool_calls:
+        return None
+
+    changed_files = changeset.get("changed_files", []) if changeset else []
+    diffs = changeset.get("diffs", []) if changeset else []
+    warnings = []
+    error_calls = [call for call in write_tool_calls if call.get("result_status") == "error"]
+    applied_calls = [call for call in write_tool_calls if call.get("result_status") == "applied"]
+    dry_run_calls = [
+        call for call in write_tool_calls
+        if call.get("dry_run") or call.get("result_status") in {"dry_run", "no_change_dry_run"}
+    ]
+
+    if workspace is not None and changeset is None:
+        warnings.append("workspace exists but no changeset was recorded")
+    if changed_files and not write_tool_calls:
+        warnings.append("workspace files changed without any recorded edit_nico call")
+    if applied_calls and not changed_files:
+        warnings.append("edit_nico reported applied edits but changeset has no changed files")
+    if error_calls:
+        warnings.append("one or more edit_nico calls returned an error")
+    if dry_run_calls and not applied_calls and not changed_files:
+        warnings.append("only dry-run edit_nico calls were recorded; no source change was applied")
+
+    return {
+        "workspace_created": workspace is not None,
+        "changeset_written": changeset is not None,
+        "edit_nico_call_count": len(write_tool_calls),
+        "applied_edit_count": sum(
+            call.get("edit_count") or 0
+            for call in write_tool_calls
+            if call.get("result_status") == "applied"
+        ),
+        "changed_files_count": len(changed_files),
+        "diffs_truncated": [
+            diff.get("path")
+            for diff in diffs
+            if diff.get("diff_truncated")
+        ],
+        "warnings": warnings,
+    }
+
+
+def build_scoring_input(
+    response: str,
+    workspace_record: dict | None,
+    changeset: dict | None,
+    write_tool_calls: list[dict],
+    validation_summary: dict | None,
+) -> dict:
+    """Build the compact evidence object consumed by evaluate.py."""
+    return {
+        "schema": "t3-scoring-input-v1",
+        "final_answer": response,
+        "workspace_path": workspace_record.get("path") if workspace_record else None,
+        "changed_files": changeset.get("changed_files", []) if changeset else [],
+        "changeset_summary": changeset.get("summary") if changeset else None,
+        "compact_diffs": changeset.get("diffs", []) if changeset else [],
+        "write_tool_calls": write_tool_calls,
+        "validation_summary": validation_summary,
+    }
+
+
+def _parse_tool_output_header(output: str) -> dict[str, str]:
+    parsed = {}
+    for line in output.splitlines():
+        if not line or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key in {"status", "path", "diff_truncated"}:
+            parsed[key] = value.strip()
+    return parsed
+
+
+def _parse_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    lowered = str(value).strip().lower()
+    if lowered in {"1", "true", "yes", "y"}:
+        return True
+    if lowered in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def _truthy_tool_input(value: object) -> bool:
+    parsed = _parse_bool(value)
+    return False if parsed is None else parsed
+
+
 def available_material_files(mat_dir: Path, suffix: str) -> list[str]:
     if not mat_dir.exists():
         return []
@@ -1033,6 +1164,11 @@ def main():
         for run_num in range(1, args.runs + 1):
             result = run_direct(client, system_prompt, user_message, run_num, dry_run=False, model=model)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            write_tool_calls = []
+            validation_summary = None
+            scoring_input = build_scoring_input(
+                result["response"], None, None, write_tool_calls, validation_summary
+            )
             record = {
                 "result_schema_version": RESULT_SCHEMA_VERSION,
                 "task": task,
@@ -1049,6 +1185,10 @@ def main():
                 "db_paths": result_db_paths(condition, task),
                 "materials_scope": materials_scope(condition, task, mode),
                 "materials": [f for f, _ in materials],
+                "workspace_changeset": None,
+                "write_tool_calls": write_tool_calls,
+                "validation_summary": validation_summary,
+                "scoring_input": scoring_input,
                 "input_tokens": result["input_tokens"],
                 "output_tokens": result["output_tokens"],
                 "response": result["response"],
@@ -1139,6 +1279,7 @@ def main():
             )
             workspace_record = None
             changed_files = []
+            changeset = None
             if workspace is not None:
                 changeset = compute_changeset(workspace)
                 workspace_record = {
@@ -1148,6 +1289,11 @@ def main():
                     "changeset": changeset,
                 }
                 changed_files = changeset.get("changed_files", [])
+            write_tool_calls = summarize_write_tool_calls(result["tool_calls"])
+            validation_summary = build_validation_summary(workspace, changeset, write_tool_calls)
+            scoring_input = build_scoring_input(
+                result["response"], workspace_record, changeset, write_tool_calls, validation_summary
+            )
 
             record = {
                 "result_schema_version": RESULT_SCHEMA_VERSION,
@@ -1166,6 +1312,10 @@ def main():
                 "materials_scope": materials_scope(condition, task, mode),
                 "workspace": workspace_record,
                 "changed_files": changed_files,
+                "workspace_changeset": changeset,
+                "write_tool_calls": write_tool_calls,
+                "validation_summary": validation_summary,
+                "scoring_input": scoring_input,
                 # Token fields — three accounting layers
                 "input_tokens": result["input_tokens"],           # Layer 1: billing total (all turns summed)
                 "output_tokens": result["output_tokens"],
