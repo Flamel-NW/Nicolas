@@ -250,6 +250,22 @@ def load_system_prompt_v3(condition: str) -> str:
     return system
 
 
+def load_task_prompt_v3(task: str, condition: str) -> str:
+    """Load the v3 task prompt, with condition-specific protocol overlays."""
+    task_prompt_path = PROMPTS_DIR / f"{task.lower()}_task_v3.txt"
+    if not task_prompt_path.exists():
+        raise FileNotFoundError(f"v3 task prompt not found: {task_prompt_path}")
+
+    task_prompt = load_text(task_prompt_path).strip()
+    if condition == "C":
+        protocol_path = PROMPTS_DIR / "condition_c_protocol_v1.txt"
+        if not protocol_path.exists():
+            raise FileNotFoundError(f"Condition C protocol prompt not found: {protocol_path}")
+        protocol = load_text(protocol_path).strip()
+        task_prompt = f"{task_prompt}\n\n--- Condition C Protocol Override ---\n{protocol}"
+    return task_prompt
+
+
 def load_manual_tokens(condition: str = "C") -> int:
     """Load per-turn manual token count for the given condition.
     Condition C: manual_tokens.json (written by build_db.py).
@@ -1059,11 +1075,11 @@ def main():
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-        task_prompt_path = PROMPTS_DIR / f"{task.lower()}_task_v3.txt"
-        if not task_prompt_path.exists():
-            print(f"Error: v3 task prompt not found: {task_prompt_path}", file=sys.stderr)
+        try:
+            task_prompt = load_task_prompt_v3(task, condition)
+        except FileNotFoundError as e:
+            print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        task_prompt = load_text(task_prompt_path).strip()
 
         manual_tokens_per_turn = load_manual_tokens(condition) if condition in ("C", "D") else 0
         if condition == "D":

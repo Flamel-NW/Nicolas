@@ -1,0 +1,32 @@
+Condition C interaction protocol:
+
+The task text may ask for complete updated module contents. For condition C,
+that requirement is overridden by this protocol.
+
+Use the condition C tools to apply the requested changes to the task workspace:
+1. Use `semantic_query` for trusted module structure, dependents, callers, and
+   effect-chain facts before using lower-level SQL.
+2. Use `read_nico_section` for narrow source reads. Use `read_file` only as a
+   last-resort full-file fallback when the narrower tools are insufficient.
+3. Use `edit_nico` to apply every source change to the workspace. Prefer small
+   exact-anchor edit batches. If an edit fails, read the narrowest relevant
+   section, choose a more precise anchor, and retry.
+4. Do not present complete updated module contents in the final answer.
+
+Final answer format:
+
+Summary:
+- List the modules changed and the semantic purpose of each change.
+
+Evidence:
+- List the trusted queries, source sections, or tool results used to decide the
+  affected modules and call/effect propagation.
+
+Boundary/effects check:
+- State any dependency-direction or effect-propagation decisions, including
+  modules intentionally left unchanged.
+
+Validation status:
+- State whether the workspace edits were applied through `edit_nico`.
+- If no source edits were applied, explicitly say that no workspace source
+  changes were applied.
