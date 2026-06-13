@@ -29,6 +29,15 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv, find_dotenv
 
+from task_workspace import (
+    TaskWorkspace,
+    WorkspaceError,
+    compute_changeset,
+    plan_task_workspace,
+    prepare_task_workspace,
+    resolve_workspace_file,
+)
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -36,12 +45,13 @@ MODEL = "claude-sonnet-4-5"
 MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
-RESULT_SCHEMA_VERSION = "r6-fix-2"
+RESULT_SCHEMA_VERSION = "t3-workspace-1"
 
 HARNESS_DIR = Path(__file__).parent
 MATERIALS_DIR = HARNESS_DIR / "materials"
 PROMPTS_DIR = HARNESS_DIR / "prompts"
 RESULTS_DIR = HARNESS_DIR / "results"
+WORKSPACES_DIR = HARNESS_DIR / "workspaces"
 NICOLAS_ROOT = HARNESS_DIR.parent   # Nicolas/ repo root
 SEMANTIC_DB_DIR = MATERIALS_DIR / "semantic_db"
 
@@ -353,14 +363,20 @@ def get_tools(condition: str) -> list[dict]:
         raise ValueError(f"Unknown condition: {condition}")
 
 
-def execute_tool(tool_name: str, tool_input: dict, condition: str, task: str) -> str:
+def execute_tool(
+    tool_name: str,
+    tool_input: dict,
+    condition: str,
+    task: str,
+    workspace: TaskWorkspace | None = None,
+) -> str:
     """Execute a tool call and return the result as a string."""
     if tool_name == "read_file":
         raw_path = tool_input.get("path", "").strip()
         if condition == "A":
             return _read_file_condition_A(raw_path, task)
         elif condition == "C":
-            return _read_file_condition_C(raw_path, task)
+            return _read_file_condition_C(raw_path, task, workspace=workspace)
         elif condition == "D":
             return _read_file_condition_D(raw_path, task)
         else:
@@ -425,7 +441,7 @@ def _read_file_condition_A(path: str, task: str) -> str:
     return _read_material_file("A", path, task, ".rs")
 
 
-def _read_file_condition_C(path: str, task: str = "") -> str:
+def _read_file_condition_C(path: str, task: str = "", workspace: TaskWorkspace | None = None) -> str:
     """Serve .nico files for condition C.
 
     Priority: task-specific materials directory first (e.g. materials/condition_C/t0/),
@@ -433,6 +449,12 @@ def _read_file_condition_C(path: str, task: str = "") -> str:
     .nico files (e.g. clock.nico with microseconds for T0) are served instead of
     the current production source, which may already be in the final state.
     """
+    if workspace is not None:
+        try:
+            return load_text(resolve_workspace_file(workspace, path, suffix=".nico"))
+        except (WorkspaceError, FileNotFoundError) as e:
+            return f"Error: {e}"
+
     p = Path(path)
     if not is_safe_relative_request(p):
         return f"Error: unsafe path rejected: '{path}'"
@@ -610,7 +632,8 @@ def _run_sql_condition_D(query: str, task: str) -> str:
 
 def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
                  task: str, condition: str, run_num: int, dry_run: bool,
-                 manual_tokens_per_turn: int, model: str) -> dict:
+                 manual_tokens_per_turn: int, model: str,
+                 workspace: TaskWorkspace | None = None) -> dict:
     """Run a single experiment in multi-turn tool_use mode."""
     tools = get_tools(condition)
     messages = [{"role": "user", "content": task_prompt}]
@@ -626,6 +649,8 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
         print(f"[DRY RUN] System ({condition}):\n{system[:400]}...")
         print(f"\n[DRY RUN] Task:\n{task_prompt}")
         print(f"\n[DRY RUN] Tools: {[t['name'] for t in tools]}")
+        if workspace is not None:
+            print(f"\n[DRY RUN] Workspace: {workspace.root}")
         print(f"{'='*60}\n")
         return {}
 
@@ -660,7 +685,7 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = execute_tool(block.name, dict(block.input), condition, task)
+                    result = execute_tool(block.name, dict(block.input), condition, task, workspace=workspace)
                     preview = result[:300] + ("..." if len(result) > 300 else "")
                     tool_call_log.append({
                         "turn": turns,
@@ -744,6 +769,8 @@ def main():
                              "Default: tool_use for E1-E6, direct for T0/T7.")
     parser.add_argument("--batch-id", default=None,
                         help="Optional batch identifier written to result JSON for rerun grouping.")
+    parser.add_argument("--workspace-root", default=str(WORKSPACES_DIR),
+                        help=f"Root directory for condition C task workspaces (default: {WORKSPACES_DIR})")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print prompts without calling the API")
     args = parser.parse_args()
@@ -752,6 +779,7 @@ def main():
     condition = args.condition
     model = args.model
     mode = args.mode or ("tool_use" if task.startswith("E") else "direct")
+    workspace_root = Path(args.workspace_root)
 
     RESULTS_DIR.mkdir(exist_ok=True)
 
@@ -849,6 +877,15 @@ def main():
             print(f"DB paths: {result_db_paths(condition, task)}")
 
         if args.dry_run:
+            if condition == "C":
+                run_id = f"{task}_{condition}_v3_run01_DRY_RUN"
+                try:
+                    workspace_plan = plan_task_workspace(task, condition, run_id, args.batch_id, workspace_root)
+                except (WorkspaceError, FileNotFoundError) as e:
+                    print(f"Error: {e}", file=sys.stderr)
+                    sys.exit(1)
+                print("\n[DRY RUN] Workspace plan:")
+                print(json.dumps(workspace_plan, ensure_ascii=False, indent=2))
             run_tool_use(None, system_prompt, task_prompt, task, condition,
                          1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn, model=model)
             return
@@ -860,14 +897,39 @@ def main():
         client = anthropic.Anthropic(api_key=api_key)
 
         for run_num in range(1, args.runs + 1):
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            result_basename = f"{task}_{condition}_v3_run{run_num:02d}_{timestamp}"
+            workspace = None
+            if condition == "C":
+                try:
+                    workspace = prepare_task_workspace(
+                        task, condition, result_basename, args.batch_id, workspace_root
+                    )
+                except (WorkspaceError, FileExistsError, FileNotFoundError) as e:
+                    print(f"Error: {e}", file=sys.stderr)
+                    sys.exit(1)
+                print(f"  Workspace: {display_path(workspace.root)}")
+
             result = run_tool_use(
                 client, system_prompt, task_prompt,
                 task, condition, run_num,
                 dry_run=False,
                 manual_tokens_per_turn=manual_tokens_per_turn,
                 model=model,
+                workspace=workspace,
             )
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            workspace_record = None
+            changed_files = []
+            if workspace is not None:
+                changeset = compute_changeset(workspace)
+                workspace_record = {
+                    "path": display_path(workspace.root),
+                    "source": workspace.manifest_before.get("source") if workspace.manifest_before else None,
+                    "manifest_before": workspace.manifest_before,
+                    "changeset": changeset,
+                }
+                changed_files = changeset.get("changed_files", [])
+
             record = {
                 "result_schema_version": RESULT_SCHEMA_VERSION,
                 "task": task,
@@ -883,6 +945,8 @@ def main():
                 "db_scope": result_db_scope(condition, task),
                 "db_paths": result_db_paths(condition, task),
                 "materials_scope": materials_scope(condition, task, mode),
+                "workspace": workspace_record,
+                "changed_files": changed_files,
                 # Token fields — three accounting layers
                 "input_tokens": result["input_tokens"],           # Layer 1: billing total (all turns summed)
                 "output_tokens": result["output_tokens"],
@@ -907,7 +971,7 @@ def main():
                 "compile_rate": None,
                 "compile_rate_method": "not_run",
             }
-            out_path = RESULTS_DIR / f"{task}_{condition}_v3_run{run_num:02d}_{timestamp}.json"
+            out_path = RESULTS_DIR / f"{result_basename}.json"
             out_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
             print(f"  Saved: {out_path.name}")
 
