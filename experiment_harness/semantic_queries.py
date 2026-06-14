@@ -19,6 +19,7 @@ VALID_QUERIES = {
     "type_dependents",
     "function_callers",
     "effect_chain",
+    "affected_modules",
 }
 
 
@@ -64,6 +65,14 @@ def run_semantic_query(params: dict[str, Any], trusted_path: Path) -> str:
                     _required(params, "module"),
                     function=_optional(params, "function"),
                     effect=_optional(params, "effect"),
+                )
+            if query == "affected_modules":
+                return _affected_modules(
+                    conn,
+                    _required(params, "module"),
+                    type_name=_optional(params, "type_name"),
+                    effect=_optional(params, "effect"),
+                    transitive=_as_bool(params.get("transitive"), default=True),
                 )
     except (SemanticQueryError, sqlite3.Error) as e:
         return f"Error: {e}"
@@ -359,6 +368,119 @@ def _effect_chain(
         if not found:
             lines.append("- none")
     return "\n".join(lines)
+
+
+def _affected_modules(
+    conn: sqlite3.Connection,
+    module: str,
+    type_name: str | None,
+    effect: str | None,
+    transitive: bool,
+) -> str:
+    _ensure_module(conn, module)
+    provider = module
+    type_provider_line = "none"
+    if type_name:
+        rows = conn.execute(
+            "SELECT module_name, name FROM types WHERE name=? ORDER BY module_name",
+            (type_name,),
+        ).fetchall()
+        if not rows:
+            return f"Error: type '{type_name}' not found"
+        if len(rows) > 1:
+            providers = [row["module_name"] for row in rows]
+            return f"Error: type '{type_name}' is ambiguous. Provide module. Candidates: {providers}"
+        provider = rows[0]["module_name"]
+        type_provider_line = f"{provider}.{type_name}"
+
+    source_map = _module_source_map(conn)
+    direct_importers = _reverse_import_paths(conn, provider, transitive=False)
+    dependent_rows = _reverse_import_paths(conn, provider, transitive=transitive)
+    candidate_modules = [provider] + [row["module"] for row in dependent_rows]
+
+    lines = [
+        "affected_modules:",
+        f"source_module: {module}",
+        f"type_filter: {type_name or 'none'}",
+        f"effect_filter: {effect or 'none'}",
+        f"transitive: {str(transitive).lower()}",
+        f"direct_type_provider: {type_provider_line}",
+        "direct_importers:",
+    ]
+    if direct_importers:
+        lines.extend(
+            f"- {row['module']} source={source_map.get(row['module'], 'unknown')}"
+            for row in direct_importers
+        )
+    else:
+        lines.append("- none")
+
+    lines.append("candidate_check_modules:")
+    lines.append(f"- {provider} depth=0 source={source_map.get(provider, 'unknown')} reason=changed_or_provider_module")
+    for row in dependent_rows:
+        lines.append(
+            f"- {row['module']} depth={row['depth']} "
+            f"source={source_map.get(row['module'], 'unknown')} path={' -> '.join(row['path'])}"
+        )
+
+    module_effects = _candidate_module_effects(conn, candidate_modules, effect)
+    lines.append("matching_module_effects:")
+    if module_effects:
+        lines.extend(f"- {module}: {_compact_list(effects)}" for module, effects in module_effects)
+    else:
+        lines.append("- none")
+
+    propagated = _candidate_propagated_effects(conn, candidate_modules, effect)
+    lines.append("matching_propagated_effects:")
+    if propagated:
+        lines.extend(
+            f"- {row['module_name']}: {row['effect']} <- {row['source_module']} depth={row['depth']}"
+            for row in propagated
+        )
+    else:
+        lines.append("- none")
+    return "\n".join(lines)
+
+
+def _module_source_map(conn: sqlite3.Connection) -> dict[str, str]:
+    return {
+        row["name"]: row["source"] or "unknown"
+        for row in conn.execute("SELECT name, source FROM modules ORDER BY name")
+    }
+
+
+def _candidate_module_effects(
+    conn: sqlite3.Connection,
+    modules: list[str],
+    effect_filter: str | None,
+) -> list[tuple[str, list[str]]]:
+    rows: list[tuple[str, list[str]]] = []
+    for module in modules:
+        effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+            (module,),
+            effect_filter,
+        )
+        if effects:
+            rows.append((module, effects))
+    return rows
+
+
+def _candidate_propagated_effects(
+    conn: sqlite3.Connection,
+    modules: list[str],
+    effect_filter: str | None,
+) -> list[sqlite3.Row]:
+    module_set = set(modules)
+    rows = conn.execute(
+        "SELECT module_name, effect, source_module, depth FROM propagated_effects "
+        "ORDER BY module_name, effect, source_module, depth"
+    ).fetchall()
+    return [
+        row for row in rows
+        if row["module_name"] in module_set and (effect_filter is None or row["effect"] == effect_filter)
+    ]
 
 
 def _column(conn: sqlite3.Connection, sql: str, *params: str) -> list[str]:

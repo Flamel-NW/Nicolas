@@ -4,14 +4,23 @@ The task text may ask for complete updated module contents. For condition C,
 that requirement is overridden by this protocol.
 
 Use the condition C tools to apply the requested changes to the task workspace:
-1. Use `semantic_query` for trusted module structure, dependents, callers, and
-   effect-chain facts before using lower-level SQL.
-2. Use `read_nico_section` for narrow source reads. Use `read_file` only as a
-   last-resort full-file fallback when the narrower tools are insufficient.
-3. Use `edit_nico` to apply every source change to the workspace. Prefer small
-   exact-anchor edit batches. If an edit fails, read the narrowest relevant
-   section, choose a more precise anchor, and retry.
-4. Do not present complete updated module contents in the final answer.
+1. Fact discovery: use `semantic_query` first for trusted module structure,
+   affected modules, dependents, callers, and effect-chain facts. Use SQL only
+   when a required trusted fact is not covered by a semantic query.
+2. Narrow source read: use `read_nico_section` for the smallest relevant source
+   section. Use `read_file` only as a last-resort full-file fallback.
+3. Required edits: use `edit_nico` to apply every source change to the
+   workspace. Prefer structural ops (`insert_interface_item`,
+   `update_module_effects`, `insert_implementation_item`) for interface
+   functions, module-level effects, and implementation functions. Use
+   exact-anchor ops for local replacements.
+4. Retry rule: if an edit fails, retry only the failed file/edit after reading
+   the narrowest relevant section or using the returned nearest anchors. Do not
+   repeat the full fact discovery pass.
+5. Stop rule: once the necessary edits have been applied, do at most one
+   necessary validation pass, then stop editing and produce the compact final
+   answer. Do not run no-change edits or broad re-validation loops.
+6. Do not present complete updated module contents in the final answer.
 
 Final answer format:
 

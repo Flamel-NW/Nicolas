@@ -414,7 +414,7 @@ def get_tools(condition: str) -> list[dict]:
             "Run a compact high-level query over trusted Nicolas Semantic DB facts. "
             "Use this before SQL for common structure, dependency, caller, and effect-chain lookups. "
             "Supported query values: module_surface, module_dependents, type_dependents, "
-            "function_callers, effect_chain."
+            "function_callers, effect_chain, affected_modules."
         ),
         "input_schema": {
             "type": "object",
@@ -427,6 +427,7 @@ def get_tools(condition: str) -> list[dict]:
                         "type_dependents",
                         "function_callers",
                         "effect_chain",
+                        "affected_modules",
                     ],
                     "description": "Which high-level trusted query to run.",
                 },
@@ -444,7 +445,7 @@ def get_tools(condition: str) -> list[dict]:
                 },
                 "effect": {
                     "type": "string",
-                    "description": "Optional effect filter for effect_chain, e.g. reads_clock.",
+                    "description": "Optional effect filter for effect_chain or affected_modules, e.g. reads_clock.",
                 },
                 "transitive": {
                     "type": "boolean",
@@ -461,8 +462,10 @@ def get_tools(condition: str) -> list[dict]:
             "condition C task workspace. Use this to make small audited source changes "
             "instead of rewriting complete modules in the final answer. Supports these "
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
-            "replace_identifier. Each edit is scoped to surface, checks, implementation, "
-            "or file. The entire edit batch is atomic: any failed anchor/count check "
+            "replace_identifier, insert_interface_item, update_module_effects, "
+            "insert_implementation_item. Exact-anchor edits are scoped to surface, checks, "
+            "implementation, or file. Structural ops locate the interface, module effects, "
+            "or implementation block for you. The entire edit batch is atomic: any failed check "
             "leaves the file unchanged."
         ),
         "input_schema": {
@@ -486,6 +489,9 @@ def get_tools(condition: str) -> list[dict]:
                                     "insert_after",
                                     "insert_before_section_end",
                                     "replace_identifier",
+                                    "insert_interface_item",
+                                    "update_module_effects",
+                                    "insert_implementation_item",
                                 ],
                             },
                             "section": {
@@ -509,8 +515,18 @@ def get_tools(condition: str) -> list[dict]:
                                 "type": "integer",
                                 "description": "Required match count for target-based ops; defaults to 1.",
                             },
+                            "effects": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Effects for update_module_effects, e.g. ['reads_clock', 'metrics.write'].",
+                            },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["merge", "replace"],
+                                "description": "For update_module_effects: merge appends missing effects; replace rewrites the list.",
+                            },
                         },
-                        "required": ["op", "section"],
+                        "required": ["op"],
                     },
                 },
                 "dry_run": {
@@ -654,6 +670,9 @@ def build_validation_summary(
     workspace: TaskWorkspace | None,
     changeset: dict | None,
     write_tool_calls: list[dict],
+    response: str | None = None,
+    turns: int | None = None,
+    max_turns: int | None = None,
 ) -> dict | None:
     """Build mechanical validation metadata for scoring/audit.
 
@@ -665,6 +684,7 @@ def build_validation_summary(
     changed_files = changeset.get("changed_files", []) if changeset else []
     diffs = changeset.get("diffs", []) if changeset else []
     warnings = []
+    audit_risk_flags = []
     error_calls = [call for call in write_tool_calls if call.get("result_status") == "error"]
     applied_calls = [call for call in write_tool_calls if call.get("result_status") == "applied"]
     dry_run_calls = [
@@ -674,14 +694,29 @@ def build_validation_summary(
 
     if workspace is not None and changeset is None:
         warnings.append("workspace exists but no changeset was recorded")
+        audit_risk_flags.append("missing_changeset")
     if changed_files and not write_tool_calls:
         warnings.append("workspace files changed without any recorded edit_nico call")
+        audit_risk_flags.append("workspace_changed_without_edit_tool")
     if applied_calls and not changed_files:
         warnings.append("edit_nico reported applied edits but changeset has no changed files")
+        audit_risk_flags.append("applied_edit_without_changed_files")
     if error_calls:
         warnings.append("one or more edit_nico calls returned an error")
+        audit_risk_flags.append("edit_nico_error")
     if dry_run_calls and not applied_calls and not changed_files:
         warnings.append("only dry-run edit_nico calls were recorded; no source change was applied")
+        audit_risk_flags.append("dry_run_only_no_change")
+    if max_turns is not None and turns is not None and turns >= max_turns:
+        warnings.append("max_turns reached before clean final answer")
+        audit_risk_flags.append("max_turns_reached")
+    missing_sections = _missing_c_final_sections(response)
+    if missing_sections:
+        warnings.append(f"final answer missing protocol sections: {', '.join(missing_sections)}")
+        audit_risk_flags.append("final_answer_protocol_missing")
+    if changed_files and _claims_no_workspace_changes(response):
+        warnings.append("final answer claims no source edits, but workspace files changed")
+        audit_risk_flags.append("final_answer_workspace_mismatch")
 
     return {
         "workspace_created": workspace is not None,
@@ -698,8 +733,34 @@ def build_validation_summary(
             for diff in diffs
             if diff.get("diff_truncated")
         ],
+        "audit_risk": bool(audit_risk_flags),
+        "audit_risk_flags": audit_risk_flags,
         "warnings": warnings,
     }
+
+
+def _missing_c_final_sections(response: str | None) -> list[str]:
+    if not response or not response.strip():
+        return []
+    required = [
+        "Summary:",
+        "Evidence:",
+        "Boundary/effects check:",
+        "Validation status:",
+    ]
+    return [section for section in required if section not in response]
+
+
+def _claims_no_workspace_changes(response: str | None) -> bool:
+    if not response:
+        return False
+    lowered = response.lower()
+    phrases = [
+        "no workspace source changes were applied",
+        "no source edits were applied",
+        "no source changes were applied",
+    ]
+    return any(phrase in lowered for phrase in phrases)
 
 
 def build_scoring_input(
@@ -1370,7 +1431,14 @@ def main():
                 }
                 changed_files = changeset.get("changed_files", [])
             write_tool_calls = summarize_write_tool_calls(result["tool_calls"])
-            validation_summary = build_validation_summary(workspace, changeset, write_tool_calls)
+            validation_summary = build_validation_summary(
+                workspace,
+                changeset,
+                write_tool_calls,
+                response=result["response"],
+                turns=result.get("turns"),
+                max_turns=MAX_TURNS,
+            )
             scoring_input = build_scoring_input(
                 result["response"], workspace_record, changeset, write_tool_calls, validation_summary
             )

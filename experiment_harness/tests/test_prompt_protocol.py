@@ -12,7 +12,9 @@ class PromptProtocolTest(unittest.TestCase):
         prompt = run_experiment.load_task_prompt_v3("E1", "C")
 
         self.assertIn("--- Condition C Protocol Override ---", prompt)
-        self.assertIn("Use `edit_nico` to apply every source change", prompt)
+        self.assertIn("use `edit_nico` to apply every source change", prompt)
+        self.assertIn("`insert_interface_item`", prompt)
+        self.assertIn("Stop rule:", prompt)
         self.assertIn("Do not present complete updated module contents", prompt)
         self.assertIn("Final answer format:", prompt)
 

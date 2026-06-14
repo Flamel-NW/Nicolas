@@ -41,6 +41,9 @@ class SemanticQueriesTest(unittest.TestCase):
             ("audit.log", "src/audit/log.rs"),
             ("user.profile_service", "src/user/profile_service.rs"),
             ("user.admin_service", "src/user/admin_service.rs"),
+            ("session.types", "src/session/types.rs"),
+            ("session.store", "src/session/store.rs"),
+            ("session.service", "src/session/service.rs"),
         ]
         conn.executemany(
             "INSERT INTO modules (name, source, schema_version) VALUES (?, ?, 'test')",
@@ -57,6 +60,9 @@ class SemanticQueriesTest(unittest.TestCase):
                 ("user.profile_service", "user.store"),
                 ("user.profile_service", "audit.log"),
                 ("user.admin_service", "user.profile_service"),
+                ("session.types", "user.types"),
+                ("session.store", "session.types"),
+                ("session.service", "session.store"),
             ],
         )
         conn.executemany(
@@ -109,6 +115,7 @@ class SemanticQueriesTest(unittest.TestCase):
                 ("user.profile_service", "db.read", "user.store", 1),
                 ("user.profile_service", "audit.write", "audit.log", 1),
                 ("user.admin_service", "reads_clock", "user.profile_service", 1),
+                ("session.service", "reads_clock", "cache.kv", 1),
             ],
         )
         conn.executemany(
@@ -170,6 +177,25 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn("direct_function_effects: db.read", chain)
         self.assertIn("user.store.mark_deactivated", chain)
         self.assertIn("callee_effects=db.read", chain)
+
+    def test_affected_modules_lists_trusted_candidates_and_effect_context(self) -> None:
+        out = run_semantic_query(
+            {
+                "query": "affected_modules",
+                "module": "user.types",
+                "type_name": "UserProfile",
+                "effect": "reads_clock",
+            },
+            self.db_path,
+        )
+
+        self.assertIn("direct_type_provider: user.types.UserProfile", out)
+        self.assertIn("session.types depth=1", out)
+        self.assertIn("session.service depth=3", out)
+        self.assertIn("user.profile_service depth=1", out)
+        self.assertIn("user.admin_service depth=2", out)
+        self.assertIn("matching_propagated_effects:", out)
+        self.assertIn("user.profile_service: reads_clock <- cache.kv depth=1", out)
 
 
 if __name__ == "__main__":

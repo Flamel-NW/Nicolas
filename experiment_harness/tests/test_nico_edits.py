@@ -155,6 +155,89 @@ module audit.log {
         self.assertIn("pub fn export_profile_marker() {}", changed)
         self.assertLess(changed.index("pub fn export_profile_marker"), changed.rindex("\n}"))
 
+    def test_structural_ops_insert_inside_interface_and_implementation(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.profile_service {
+  spec {
+    interface {
+      fn get_profile(id: UserId) -> Option
+        effects [reads_clock, db.read]
+    }
+
+    effects [reads_clock, db.read]
+  }
+
+  checks { }
+
+  implementation rust {
+    pub fn get_profile(_id: UserId) -> Option<UserProfile> {
+        todo!()
+    }
+  }
+}
+""".lstrip(),
+            rel="src/user/profile_service.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/user/profile_service.nico", [
+            {
+                "op": "insert_interface_item",
+                "text": """
+      fn suspend_user(id: UserId) -> ()
+        effects [db.read, db.write, audit.write]
+""".rstrip(),
+            },
+            {
+                "op": "update_module_effects",
+                "effects": ["db.write", "audit.write"],
+                "mode": "merge",
+            },
+            {
+                "op": "insert_implementation_item",
+                "text": """
+    pub fn suspend_user(_id: UserId) {
+        todo!()
+    }
+""".rstrip(),
+            },
+        ])
+
+        self.assertIn("status: applied", result)
+        changed = (workspace.root / "src/user/profile_service.nico").read_text(encoding="utf-8")
+        interface_insert = changed.index("fn suspend_user(id: UserId)")
+        module_effects = changed.index("    effects [reads_clock, db.read, db.write, audit.write]")
+        impl_insert = changed.index("pub fn suspend_user(_id: UserId)")
+        self.assertLess(interface_insert, module_effects)
+        self.assertGreater(impl_insert, changed.index("implementation rust"))
+
+    def test_structural_insert_missing_interface_is_atomic(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.profile_service {
+  spec {
+    effects [reads_clock]
+  }
+  checks { }
+  implementation rust {
+    pub fn get_profile() {}
+  }
+}
+""".lstrip(),
+            rel="src/user/profile_service.nico",
+        )
+        path = workspace.root / "src/user/profile_service.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/profile_service.nico", [{
+            "op": "insert_interface_item",
+            "text": "      fn suspend_user(id: UserId) -> ()",
+        }])
+
+        self.assertIn("Error:", result)
+        self.assertIn("surface.interface", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
     def test_batch_is_atomic_when_later_edit_fails(self) -> None:
         workspace = self.prepare_workspace(
             """
@@ -180,12 +263,16 @@ module user.types {
             {
                 "op": "replace_text",
                 "section": "implementation",
-                "target": "missing anchor",
+                "target": "pub struct UserProfil",
                 "replacement": "never written",
             },
         ])
 
         self.assertIn("Error:", result)
+        self.assertIn("section: implementation", result)
+        self.assertIn("match_count: 0", result)
+        self.assertIn("nearest_anchors:", result)
+        self.assertIn("section_tail_context:", result)
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_dry_run_does_not_write_file(self) -> None:

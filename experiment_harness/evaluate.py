@@ -286,9 +286,14 @@ def print_scoring_context(record: dict) -> None:
     if validation_summary:
         print("\nVALIDATION SUMMARY:")
         for key, value in validation_summary.items():
-            if key == "warnings":
+            if key in {"warnings", "audit_risk_flags"}:
                 continue
             print(f"  {key}: {value}")
+        flags = validation_summary.get("audit_risk_flags") or []
+        if flags:
+            print("  audit_risk_flags:")
+            for flag in flags:
+                print(f"    - {flag}")
         warnings = validation_summary.get("warnings") or []
         if warnings:
             print("  warnings:")

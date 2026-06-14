@@ -92,6 +92,25 @@ class ScoringInputTest(unittest.TestCase):
         self.assertEqual(scoring_input["write_tool_calls"][0]["result_status"], "applied")
         self.assertEqual(scoring_input["validation_summary"]["applied_edit_count"], 2)
 
+    def test_validation_summary_marks_audit_risk_flags(self) -> None:
+        changeset = self.changeset()
+        write_calls = run_experiment.summarize_write_tool_calls([
+            self.edit_tool_call(status="error"),
+        ])
+        validation = run_experiment.build_validation_summary(
+            None,
+            changeset,
+            write_calls,
+            response="Summary:\n- changed user.types",
+            turns=25,
+            max_turns=25,
+        )
+
+        self.assertIs(validation["audit_risk"], True)
+        self.assertIn("edit_nico_error", validation["audit_risk_flags"])
+        self.assertIn("max_turns_reached", validation["audit_risk_flags"])
+        self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
     def test_evaluator_falls_back_to_workspace_changeset_for_old_results(self) -> None:
         record = {
             "response": "Summary:\n- changed user.types",

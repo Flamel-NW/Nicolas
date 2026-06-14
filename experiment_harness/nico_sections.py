@@ -58,6 +58,30 @@ def extract_nico_section(source: str, section: str) -> str:
     return source[start:end].strip()
 
 
+def extract_nested_block_span(source: str, section: str, block_name: str) -> tuple[int, int]:
+    """Return the absolute span for a named block inside a top-level section."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", block_name):
+        raise NicoSectionError(f"invalid nested block name '{block_name}'")
+
+    section_start, section_end = extract_nico_section_span(source, section)
+    section_text = source[section_start:section_end]
+    masked = mask_non_code(section_text)
+    pattern = re.compile(rf"\b{re.escape(block_name)}\s*\{{")
+    match = pattern.search(masked)
+    if match is None:
+        raise NicoSectionError(f"nested block '{section}.{block_name}' not found")
+
+    open_brace = masked.find("{", match.start(), match.end())
+    if open_brace < 0:
+        raise NicoSectionError(f"nested block '{section}.{block_name}' has no opening brace")
+
+    close_brace = find_matching_brace(masked, open_brace)
+    if close_brace < 0:
+        raise NicoSectionError(f"nested block '{section}.{block_name}' has no matching closing brace")
+
+    return section_start + match.start(), section_start + close_brace + 1
+
+
 def find_matching_brace(masked_source: str, open_brace: int) -> int:
     if open_brace >= len(masked_source) or masked_source[open_brace] != "{":
         return -1
