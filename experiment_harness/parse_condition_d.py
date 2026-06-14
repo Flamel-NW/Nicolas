@@ -30,7 +30,6 @@ Usage:
 
 import argparse
 import json
-import os
 import re
 import sqlite3
 import sys
@@ -574,13 +573,9 @@ def main() -> None:
 
 
 def count_manual_tokens(manual_content: str) -> int:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("  WARNING: ANTHROPIC_API_KEY not set — using character estimate for token count.")
-        return len(manual_content) // 3
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic()
         minimal_msg = [{"role": "user", "content": "x"}]
         r_with = client.messages.count_tokens(
             model=MODEL, system=manual_content, messages=minimal_msg,
@@ -590,7 +585,7 @@ def count_manual_tokens(manual_content: str) -> int:
     except AttributeError:
         try:
             import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic()
             minimal_msg = [{"role": "user", "content": "x"}]
             r_with = client.beta.messages.count_tokens(
                 model=MODEL, system=manual_content, messages=minimal_msg,

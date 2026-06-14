@@ -28,7 +28,6 @@ Usage:
 """
 
 import json
-import os
 import sqlite3
 import sys
 from collections import defaultdict, deque
@@ -46,7 +45,7 @@ MANUAL_TOKENS_PATH = MATERIALS_DIR / "manual_tokens.json"
 MODEL = "claude-sonnet-4-5"
 
 # ---------------------------------------------------------------------------
-# Load .env
+# Load .env. API credentials are managed there and read by SDK clients.
 # ---------------------------------------------------------------------------
 dotenv_path = find_dotenv(usecwd=False, raise_error_if_not_found=False)
 if dotenv_path:
@@ -286,14 +285,9 @@ def compute_propagated_effects(trusted: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 def count_manual_tokens(manual_content: str) -> int:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("  WARNING: ANTHROPIC_API_KEY not set — using character estimate for token count.")
-        return len(manual_content) // 3
-
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic()
         minimal_msg = [{"role": "user", "content": "x"}]
 
         r_with = client.messages.count_tokens(
@@ -309,7 +303,7 @@ def count_manual_tokens(manual_content: str) -> int:
     except AttributeError:
         try:
             import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.Anthropic()
             minimal_msg = [{"role": "user", "content": "x"}]
             r_with = client.beta.messages.count_tokens(
                 model=MODEL,

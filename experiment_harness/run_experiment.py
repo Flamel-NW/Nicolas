@@ -77,7 +77,8 @@ RUST_SOURCE_ALIASES = {
 }
 
 # ---------------------------------------------------------------------------
-# Load .env (search from harness dir upward; finds workspace root .env)
+# Load .env (search from harness dir upward; finds workspace root .env).
+# API credentials are managed there and read by SDK clients.
 # ---------------------------------------------------------------------------
 dotenv_path = find_dotenv(usecwd=False, raise_error_if_not_found=False)
 if dotenv_path:
@@ -1155,11 +1156,7 @@ def main():
             run_direct(None, system_prompt, user_message, 1, dry_run=True, model=model)
             return
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: ANTHROPIC_API_KEY not set.", file=sys.stderr)
-            sys.exit(1)
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic()
 
         for run_num in range(1, args.runs + 1):
             result = run_direct(client, system_prompt, user_message, run_num, dry_run=False, model=model)
@@ -1249,11 +1246,7 @@ def main():
                          1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn, model=model)
             return
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            print("Error: ANTHROPIC_API_KEY not set.", file=sys.stderr)
-            sys.exit(1)
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic()
 
         for run_num in range(1, args.runs + 1):
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
