@@ -25,6 +25,25 @@ class PromptProtocolTest(unittest.TestCase):
                 self.assertNotIn("Use `edit_nico` to apply every source change", prompt)
                 self.assertIn("For each module that requires changes, output its complete updated content.", prompt)
 
+    def test_deepseek_provider_defaults_and_request_options(self) -> None:
+        self.assertEqual(
+            run_experiment.effective_model("deepseek", None),
+            "deepseek-v4-flash",
+        )
+        self.assertEqual(
+            run_experiment.provider_request_options("deepseek"),
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(run_experiment.api_format("deepseek"), "anthropic")
+
+    def test_anthropic_provider_defaults_and_request_options(self) -> None:
+        self.assertEqual(
+            run_experiment.effective_model("anthropic", None),
+            "claude-sonnet-4-5",
+        )
+        self.assertEqual(run_experiment.provider_request_options("anthropic"), {})
+        self.assertEqual(run_experiment.api_format("anthropic"), "anthropic")
+
 
 if __name__ == "__main__":
     unittest.main()

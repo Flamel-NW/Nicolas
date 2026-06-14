@@ -45,6 +45,9 @@ from task_workspace import (
 # Config
 # ---------------------------------------------------------------------------
 MODEL = "claude-sonnet-4-5"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_ANTHROPIC_BASE_URL = "https://api.deepseek.com/anthropic"
+DEEPSEEK_THINKING = {"type": "disabled"}
 MAX_TOKENS = 16384
 TEMPERATURE = 0        # deterministic; eliminates LLM randomness as a variable
 MAX_TURNS = 25         # safety cap for multi-turn tool_use loops
@@ -60,6 +63,7 @@ SEMANTIC_DB_DIR = MATERIALS_DIR / "semantic_db"
 
 VALID_TASKS = ("T0", "T7", "E1", "E2", "E3", "E4", "E5", "E6")
 VALID_CONDITIONS = ("A", "C", "D")
+VALID_PROVIDERS = ("anthropic", "deepseek")
 RUST_SOURCE_ALIASES = {
     "src/audit/log.rs": "log.rs",
     "src/cache/kv.rs": "kv.rs",
@@ -111,6 +115,48 @@ def path_is_under(path: Path, root: Path) -> bool:
 
 def is_safe_relative_request(path: Path) -> bool:
     return not path.is_absolute() and ".." not in path.parts
+
+
+def create_api_client(provider: str) -> anthropic.Anthropic:
+    """Create the API client without credential preflight checks.
+
+    The workspace root .env is loaded at module startup. Credential presence is
+    intentionally left to the SDK/API call path so protocol.md remains the
+    single source for credential management.
+    """
+    if provider == "anthropic":
+        return anthropic.Anthropic()
+    if provider == "deepseek":
+        return anthropic.Anthropic(
+            api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+            base_url=DEEPSEEK_ANTHROPIC_BASE_URL,
+        )
+    raise ValueError(f"Unknown provider: {provider}")
+
+
+def effective_model(provider: str, model: str | None) -> str:
+    if model:
+        return model
+    if provider == "deepseek":
+        return DEEPSEEK_MODEL
+    return MODEL
+
+
+def api_format(provider: str) -> str:
+    if provider in VALID_PROVIDERS:
+        return "anthropic"
+    raise ValueError(f"Unknown provider: {provider}")
+
+
+def provider_request_options(provider: str) -> dict:
+    if provider == "deepseek":
+        return {"thinking": DEEPSEEK_THINKING}
+    return {}
+
+
+def returned_model(response: object) -> str | None:
+    value = getattr(response, "model", None)
+    return str(value) if value is not None else None
 
 
 def task_materials_dir(condition: str, task: str) -> Path:
@@ -201,7 +247,7 @@ def build_user_message(task_prompt: str, materials: list[tuple[str, str]]) -> st
 
 
 def run_direct(client: anthropic.Anthropic, system: str, user: str,
-               run_num: int, dry_run: bool, model: str) -> dict:
+               run_num: int, dry_run: bool, model: str, provider: str) -> dict:
     if dry_run:
         print(f"\n{'='*60}")
         print(f"[DRY RUN] System prompt:\n{system}")
@@ -216,6 +262,7 @@ def run_direct(client: anthropic.Anthropic, system: str, user: str,
         temperature=TEMPERATURE,
         system=system,
         messages=[{"role": "user", "content": user}],
+        **provider_request_options(provider),
     )
     input_tokens = response.usage.input_tokens
     output_tokens = response.usage.output_tokens
@@ -225,6 +272,7 @@ def run_direct(client: anthropic.Anthropic, system: str, user: str,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "response": response_text,
+        "returned_model": returned_model(response),
     }
 
 
@@ -984,6 +1032,7 @@ def _run_sql_condition_D(query: str, task: str) -> str:
 def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
                  task: str, condition: str, run_num: int, dry_run: bool,
                  manual_tokens_per_turn: int, model: str,
+                 provider: str,
                  workspace: TaskWorkspace | None = None) -> dict:
     """Run a single experiment in multi-turn tool_use mode."""
     tools = get_tools(condition)
@@ -992,6 +1041,7 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
     total_input_tokens = 0
     total_output_tokens = 0
     per_turn_input_tokens: list[int] = []
+    per_turn_returned_models: list[str | None] = []
     turns = 0
     final_text = ""
 
@@ -1015,12 +1065,14 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
             system=system,
             tools=tools,
             messages=messages,
+            **provider_request_options(provider),
         )
         turns += 1
         turn_input = response.usage.input_tokens
         total_input_tokens += turn_input
         total_output_tokens += response.usage.output_tokens
         per_turn_input_tokens.append(turn_input)
+        per_turn_returned_models.append(returned_model(response))
         print(f"T{turns}(in={turn_input},out={response.usage.output_tokens})",
               end=" ", flush=True)
 
@@ -1078,9 +1130,28 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
 
     last_turn_input = per_turn_input_tokens[-1] if per_turn_input_tokens else 0
     has_manual = condition in ("C", "D")
-    manual_overhead_total = manual_tokens_per_turn * turns if has_manual else 0
-    task_input_tokens = total_input_tokens - manual_overhead_total
-    true_task_tokens = last_turn_input - manual_tokens_per_turn if has_manual else last_turn_input
+    if provider == "deepseek":
+        # DeepSeek's Anthropic-compatible endpoint reports usage with a
+        # different accounting basis from Anthropic Messages. Keep the raw
+        # provider usage numeric, but do not apply the Anthropic L2/L3 manual
+        # subtraction formula because it can produce invalid negative values.
+        manual_overhead_total = 0
+        task_input_tokens = total_input_tokens
+        true_task_tokens = last_turn_input
+        token_accounting_method = "deepseek_provider_reported_usage_no_manual_subtraction"
+        token_accounting_comparable_with_baseline = False
+        token_accounting_note = (
+            "DeepSeek Anthropic-compatible usage is not interpreted as the "
+            "Anthropic cumulative-context token basis used by existing L2/L3 "
+            "baselines; raw provider token fields are retained for diagnostics."
+        )
+    else:
+        manual_overhead_total = manual_tokens_per_turn * turns if has_manual else 0
+        task_input_tokens = total_input_tokens - manual_overhead_total
+        true_task_tokens = last_turn_input - manual_tokens_per_turn if has_manual else last_turn_input
+        token_accounting_method = "anthropic_cumulative_context_l1_l2_l3"
+        token_accounting_comparable_with_baseline = True
+        token_accounting_note = None
 
     print(
         f"done. total_input={total_input_tokens} last_turn_input={last_turn_input} "
@@ -1095,11 +1166,16 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
         "tool_call_count": len(tool_call_log),
         "turns": turns,
         "per_turn_input_tokens": per_turn_input_tokens,
+        "per_turn_returned_models": per_turn_returned_models,
+        "returned_model": next((m for m in reversed(per_turn_returned_models) if m), None),
         "last_turn_input_tokens": last_turn_input,
         "manual_tokens_per_turn": manual_tokens_per_turn,
         "manual_overhead_total": manual_overhead_total,
         "task_input_tokens": task_input_tokens,
         "true_task_tokens": true_task_tokens,
+        "token_accounting_method": token_accounting_method,
+        "token_accounting_comparable_with_baseline": token_accounting_comparable_with_baseline,
+        "token_accounting_note": token_accounting_note,
     }
 
 
@@ -1113,8 +1189,10 @@ def main():
     parser.add_argument("--condition", required=True, choices=VALID_CONDITIONS)
     parser.add_argument("--runs", type=int, default=3,
                         help="Number of runs (default 3)")
-    parser.add_argument("--model", default=MODEL,
-                        help=f"Anthropic model (default: {MODEL})")
+    parser.add_argument("--provider", choices=VALID_PROVIDERS, default="anthropic",
+                        help="API provider (default: anthropic). DeepSeek uses the Anthropic-compatible API.")
+    parser.add_argument("--model", default=None,
+                        help=f"Model name (defaults: anthropic={MODEL}, deepseek={DEEPSEEK_MODEL})")
     parser.add_argument("--mode", choices=("direct", "tool_use"), default=None,
                         help="'direct': single-turn v2 mode; 'tool_use': multi-turn v3 mode. "
                              "Default: tool_use for E1-E6, direct for T0/T7.")
@@ -1128,7 +1206,8 @@ def main():
 
     task = args.task
     condition = args.condition
-    model = args.model
+    provider = args.provider
+    model = effective_model(provider, args.model)
     mode = args.mode or ("tool_use" if task.startswith("E") else "direct")
     workspace_root = Path(args.workspace_root)
 
@@ -1147,19 +1226,19 @@ def main():
             sys.exit(1)
 
         print(f"\nExperiment: task={task}  condition={condition}  runs={args.runs}  "
-              f"model={model}  mode=direct")
+              f"provider={provider}  model={model}  mode=direct")
         print(f"Materials ({len(materials)} files): {[f for f, _ in materials]}")
 
         user_message = build_user_message(task_prompt, materials)
 
         if args.dry_run:
-            run_direct(None, system_prompt, user_message, 1, dry_run=True, model=model)
+            run_direct(None, system_prompt, user_message, 1, dry_run=True, model=model, provider=provider)
             return
 
-        client = anthropic.Anthropic()
+        client = create_api_client(provider)
 
         for run_num in range(1, args.runs + 1):
-            result = run_direct(client, system_prompt, user_message, run_num, dry_run=False, model=model)
+            result = run_direct(client, system_prompt, user_message, run_num, dry_run=False, model=model, provider=provider)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             write_tool_calls = []
             validation_summary = None
@@ -1173,6 +1252,12 @@ def main():
                 "run": run_num,
                 "batch_id": args.batch_id,
                 "model": model,
+                "provider": provider,
+                "requested_model": model,
+                "returned_model": result.get("returned_model"),
+                "per_turn_returned_models": [result.get("returned_model")],
+                "api_format": api_format(provider),
+                "thinking": DEEPSEEK_THINKING if provider == "deepseek" else None,
                 "temperature": TEMPERATURE,
                 "max_tokens": MAX_TOKENS,
                 "max_turns": None,
@@ -1226,7 +1311,7 @@ def main():
                 sys.exit(1)
 
         print(f"\nExperiment: task={task}  condition={condition}  runs={args.runs}  "
-              f"model={model}  mode=tool_use")
+              f"provider={provider}  model={model}  mode=tool_use")
         if condition in ("C", "D"):
             print(f"Manual overhead: {manual_tokens_per_turn} tokens/turn")
         if condition in ("C", "D"):
@@ -1243,10 +1328,11 @@ def main():
                 print("\n[DRY RUN] Workspace plan:")
                 print(json.dumps(workspace_plan, ensure_ascii=False, indent=2))
             run_tool_use(None, system_prompt, task_prompt, task, condition,
-                         1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn, model=model)
+                         1, dry_run=True, manual_tokens_per_turn=manual_tokens_per_turn,
+                         model=model, provider=provider)
             return
 
-        client = anthropic.Anthropic()
+        client = create_api_client(provider)
 
         for run_num in range(1, args.runs + 1):
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1268,6 +1354,7 @@ def main():
                 dry_run=False,
                 manual_tokens_per_turn=manual_tokens_per_turn,
                 model=model,
+                provider=provider,
                 workspace=workspace,
             )
             workspace_record = None
@@ -1295,6 +1382,12 @@ def main():
                 "run": run_num,
                 "batch_id": args.batch_id,
                 "model": model,
+                "provider": provider,
+                "requested_model": model,
+                "returned_model": result.get("returned_model"),
+                "per_turn_returned_models": result.get("per_turn_returned_models", []),
+                "api_format": api_format(provider),
+                "thinking": DEEPSEEK_THINKING if provider == "deepseek" else None,
                 "temperature": TEMPERATURE,
                 "max_tokens": MAX_TOKENS,
                 "max_turns": MAX_TURNS,
@@ -1318,6 +1411,9 @@ def main():
                 "manual_overhead_total": result["manual_overhead_total"],   # Layer 2: manual cost × turns
                 "task_input_tokens": result["task_input_tokens"],           # Layer 2: total minus manual overhead
                 "true_task_tokens": result["true_task_tokens"],             # Layer 3: last_turn − manual (no double-counting)
+                "token_accounting_method": result["token_accounting_method"],
+                "token_accounting_comparable_with_baseline": result["token_accounting_comparable_with_baseline"],
+                "token_accounting_note": result["token_accounting_note"],
                 # Tool-use fields
                 "turns": result["turns"],
                 "tool_call_count": result["tool_call_count"],
