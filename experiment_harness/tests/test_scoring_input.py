@@ -111,6 +111,48 @@ class ScoringInputTest(unittest.TestCase):
         self.assertIn("max_turns_reached", validation["audit_risk_flags"])
         self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
 
+    def test_final_answer_protocol_accepts_markdown_and_bold_headings(self) -> None:
+        response = """
+## Summary
+- changed user.profile_service
+
+**Evidence:**
+- semantic_query(module_surface)
+
+### Boundary/effects check
+- no boundary violation
+
+__Validation status:__
+- edits applied through edit_nico
+""".strip()
+
+        validation = run_experiment.build_validation_summary(
+            None,
+            self.changeset(),
+            run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            response=response,
+        )
+
+        self.assertNotIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
+    def test_final_answer_protocol_rejects_analysis_only_response(self) -> None:
+        response = """
+**Analysis:**
+- I have a plan.
+
+**Plan:**
+- Apply edits.
+""".strip()
+
+        validation = run_experiment.build_validation_summary(
+            None,
+            self.changeset(),
+            run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            response=response,
+        )
+
+        self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
     def test_evaluator_falls_back_to_workspace_changeset_for_old_results(self) -> None:
         record = {
             "response": "Summary:\n- changed user.types",

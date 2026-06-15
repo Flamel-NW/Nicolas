@@ -11,9 +11,14 @@ Use the condition C tools to apply the requested changes to the task workspace:
    section. Use `read_file` only as a last-resort full-file fallback.
 3. Required edits: use `edit_nico` to apply every source change to the
    workspace. Prefer structural ops (`insert_interface_item`,
-   `update_module_effects`, `insert_implementation_item`) for interface
-   functions, module-level effects, and implementation functions. Use
-   exact-anchor ops for local replacements.
+   `update_module_imports`, `update_module_effects`,
+   `insert_implementation_item`) for interface functions, module-level imports,
+   module-level effects, and implementation functions. Use exact-anchor ops for
+   local replacements.
+   Do not use broad `replace_text` edits for module-level `imports [...]` or
+   module-level `effects [...]`; use `update_module_imports` and
+   `update_module_effects` so function-level effects are not matched by
+   mistake.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass.
@@ -23,6 +28,10 @@ Use the condition C tools to apply the requested changes to the task workspace:
 6. Do not present complete updated module contents in the final answer.
 
 Final answer format:
+
+Use exactly these four final sections. Do not use an "Analysis" or "Plan"
+section as the final answer. Markdown headings are tolerated by the harness,
+but the preferred final answer labels are the exact labels below.
 
 Summary:
 - List the modules changed and the semantic purpose of each change.

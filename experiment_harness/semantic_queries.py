@@ -439,6 +439,12 @@ def _affected_modules(
         )
     else:
         lines.append("- none")
+
+    lines.append("effect_update_candidates:")
+    if effect:
+        lines.extend(_effect_update_candidate_lines(conn, candidate_modules, effect, source_map))
+    else:
+        lines.append("- none (effect_filter required)")
     return "\n".join(lines)
 
 
@@ -481,6 +487,30 @@ def _candidate_propagated_effects(
         row for row in rows
         if row["module_name"] in module_set and (effect_filter is None or row["effect"] == effect_filter)
     ]
+
+
+def _effect_update_candidate_lines(
+    conn: sqlite3.Connection,
+    modules: list[str],
+    effect: str,
+    source_map: dict[str, str],
+) -> list[str]:
+    lines: list[str] = []
+    for module in modules:
+        current_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+            (module,),
+            None,
+        )
+        has_effect = effect in current_effects
+        action = "verify_no_change" if has_effect else "add_effect"
+        lines.append(
+            f"- {module} action={action} has_effect={str(has_effect).lower()} "
+            f"current_module_effects={_compact_list(current_effects)} "
+            f"source={source_map.get(module, 'unknown')}"
+        )
+    return lines or ["- none"]
 
 
 def _column(conn: sqlite3.Connection, sql: str, *params: str) -> list[str]:

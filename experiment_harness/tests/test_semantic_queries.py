@@ -196,6 +196,9 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn("user.admin_service depth=2", out)
         self.assertIn("matching_propagated_effects:", out)
         self.assertIn("user.profile_service: reads_clock <- cache.kv depth=1", out)
+        self.assertIn("effect_update_candidates:", out)
+        self.assertIn("user.types action=add_effect has_effect=false", out)
+        self.assertIn("user.profile_service action=verify_no_change has_effect=true", out)
 
 
 if __name__ == "__main__":

@@ -30,12 +30,18 @@ VALID_OPS = {
     "insert_before_section_end",
     "replace_identifier",
     "insert_interface_item",
+    "update_module_imports",
     "update_module_effects",
     "insert_implementation_item",
 }
 VALID_SECTIONS = {"file", "surface", "checks", "implementation"}
 INSERT_OPS = {"insert_before", "insert_after", "insert_before_section_end"}
-STRUCTURAL_OPS = {"insert_interface_item", "update_module_effects", "insert_implementation_item"}
+STRUCTURAL_OPS = {
+    "insert_interface_item",
+    "update_module_imports",
+    "update_module_effects",
+    "insert_implementation_item",
+}
 MAX_DIFF_CHARS = 6000
 MAX_CONTEXT_CHARS = 800
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -149,6 +155,15 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         scoped = source[start:end]
         changed, count = _insert_before_section_end(scoped, text)
         section = "implementation"
+    elif op == "update_module_imports":
+        imports = _string_list(edit, "imports", index)
+        mode = str(edit.get("mode", "merge")).strip() or "merge"
+        if mode not in {"merge", "replace"}:
+            raise NicoEditError(f"edit #{index}: mode must be 'merge' or 'replace'")
+        start, end = extract_nico_section_span(source, "surface")
+        scoped = source[start:end]
+        changed, count = _update_module_imports(scoped, imports, mode)
+        section = "surface.imports"
     elif op == "update_module_effects":
         effects = _string_list(edit, "effects", index)
         mode = str(edit.get("mode", "merge")).strip() or "merge"
@@ -221,7 +236,14 @@ def _replace_identifier(
 
 
 def _update_module_effects(scoped: str, requested_effects: list[str], mode: str) -> tuple[str, int]:
-    effects_start, effects_end, current_effects = _module_effects_span(scoped)
+    scoped = _remove_absence_comments(scoped, "effects")
+    span = _top_level_list_span(scoped, "effects")
+    if span is None:
+        replacement = f"    effects [{', '.join(requested_effects)}]"
+        insert_at = _module_effects_insert_offset(scoped)
+        return _insert_top_level_item(scoped, insert_at, replacement), 1
+
+    effects_start, effects_end, current_effects = span
     if mode == "replace":
         next_effects = requested_effects
     else:
@@ -233,15 +255,45 @@ def _update_module_effects(scoped: str, requested_effects: list[str], mode: str)
     return scoped[:effects_start] + replacement + scoped[effects_end:], 1
 
 
+def _update_module_imports(scoped: str, requested_imports: list[str], mode: str) -> tuple[str, int]:
+    scoped = _remove_absence_comments(scoped, "imports")
+    span = _top_level_list_span(scoped, "imports")
+    if span is None:
+        replacement = f"    imports [{', '.join(requested_imports)}]"
+        insert_at = _module_imports_insert_offset(scoped)
+        return _insert_top_level_item(scoped, insert_at, replacement), 1
+
+    imports_start, imports_end, current_imports = span
+    if mode == "replace":
+        next_imports = requested_imports
+    else:
+        next_imports = list(current_imports)
+        for import_name in requested_imports:
+            if import_name not in next_imports:
+                next_imports.append(import_name)
+    replacement = f"imports [{', '.join(next_imports)}]"
+    return scoped[:imports_start] + replacement + scoped[imports_end:], 1
+
+
 def _module_effects_span(scoped: str) -> tuple[int, int, list[str]]:
+    span = _top_level_list_span(scoped, "effects")
+    if span is not None:
+        return span
+    raise NicoEditError(
+        "module-level effects list not found; section=surface; "
+        f"section_tail_context:\n{_tail_context(scoped)}"
+    )
+
+
+def _top_level_list_span(scoped: str, list_name: str) -> tuple[int, int, list[str]] | None:
     masked = mask_non_code(scoped)
     spec_match = re.search(r"\bspec\s*\{", masked)
     if spec_match is None:
-        raise NicoEditError("module-level effects list not found; section=surface; reason=missing spec block")
+        raise NicoEditError(f"module-level {list_name} list not found; section=surface; reason=missing spec block")
     open_brace = masked.find("{", spec_match.start(), spec_match.end())
     close_brace = find_matching_brace(masked, open_brace)
     if close_brace < 0:
-        raise NicoEditError("module-level effects list not found; section=surface; reason=unclosed spec block")
+        raise NicoEditError(f"module-level {list_name} list not found; section=surface; reason=unclosed spec block")
 
     depth = 1
     index = open_brace + 1
@@ -255,21 +307,94 @@ def _module_effects_span(scoped: str) -> tuple[int, int, list[str]]:
             depth -= 1
             index += 1
             continue
-        if depth == 1 and _word_at(masked, index, "effects"):
+        if depth == 1 and _word_at(masked, index, list_name):
             bracket_start = masked.find("[", index, close_brace)
             if bracket_start < 0:
-                raise NicoEditError("module-level effects list has no opening bracket; section=surface")
+                raise NicoEditError(f"module-level {list_name} list has no opening bracket; section=surface")
             bracket_end = masked.find("]", bracket_start, close_brace)
             if bracket_end < 0:
-                raise NicoEditError("module-level effects list has no closing bracket; section=surface")
-            current = _parse_effect_list(scoped[bracket_start + 1:bracket_end])
+                raise NicoEditError(f"module-level {list_name} list has no closing bracket; section=surface")
+            current = _parse_comma_list(scoped[bracket_start + 1:bracket_end])
             return index, bracket_end + 1, current
         index += 1
 
-    raise NicoEditError(
-        "module-level effects list not found; section=surface; "
-        f"section_tail_context:\n{_tail_context(scoped)}"
-    )
+    return None
+
+
+def _module_imports_insert_offset(scoped: str) -> int:
+    block_start = _top_level_block_line_start(scoped, "interface")
+    if block_start is not None:
+        return block_start
+    return _spec_close_line_start(scoped)
+
+
+def _module_effects_insert_offset(scoped: str) -> int:
+    block_end = _top_level_block_end(scoped, "interface")
+    if block_end is not None:
+        return block_end
+    return _spec_close_line_start(scoped)
+
+
+def _top_level_block_line_start(scoped: str, block_name: str) -> int | None:
+    span = _top_level_block_span(scoped, block_name)
+    if span is None:
+        return None
+    start, _ = span
+    return scoped.rfind("\n", 0, start) + 1
+
+
+def _top_level_block_end(scoped: str, block_name: str) -> int | None:
+    span = _top_level_block_span(scoped, block_name)
+    if span is None:
+        return None
+    _, end = span
+    return end
+
+
+def _top_level_block_span(scoped: str, block_name: str) -> tuple[int, int] | None:
+    masked = mask_non_code(scoped)
+    spec_match = re.search(r"\bspec\s*\{", masked)
+    if spec_match is None:
+        raise NicoEditError(f"nested block '{block_name}' not found; section=surface; reason=missing spec block")
+    open_brace = masked.find("{", spec_match.start(), spec_match.end())
+    close_brace = find_matching_brace(masked, open_brace)
+    if close_brace < 0:
+        raise NicoEditError(f"nested block '{block_name}' not found; section=surface; reason=unclosed spec block")
+
+    depth = 1
+    index = open_brace + 1
+    while index < close_brace:
+        ch = masked[index]
+        if ch == "{":
+            depth += 1
+            index += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            index += 1
+            continue
+        if depth == 1 and _word_at(masked, index, block_name):
+            block_open = masked.find("{", index, close_brace)
+            if block_open < 0:
+                raise NicoEditError(f"nested block '{block_name}' has no opening brace; section=surface")
+            block_close = find_matching_brace(masked, block_open)
+            if block_close < 0:
+                raise NicoEditError(f"nested block '{block_name}' has no closing brace; section=surface")
+            return index, block_close + 1
+        index += 1
+    return None
+
+
+def _spec_close_line_start(scoped: str) -> int:
+    masked = mask_non_code(scoped)
+    spec_match = re.search(r"\bspec\s*\{", masked)
+    if spec_match is None:
+        raise NicoEditError("spec block not found; section=surface")
+    open_brace = masked.find("{", spec_match.start(), spec_match.end())
+    close_brace = find_matching_brace(masked, open_brace)
+    if close_brace < 0:
+        raise NicoEditError("spec block has no closing brace; section=surface")
+    return scoped.rfind("\n", 0, close_brace) + 1
 
 
 def _word_at(source: str, index: int, word: str) -> bool:
@@ -285,8 +410,27 @@ def _is_word_char(ch: str) -> bool:
     return bool(ch) and (ch.isalnum() or ch == "_")
 
 
-def _parse_effect_list(text: str) -> list[str]:
+def _parse_comma_list(text: str) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _remove_absence_comments(scoped: str, kind: str) -> str:
+    pattern = re.compile(
+        rf"^[ \t]*//[^\n]*(?:无\s*{re.escape(kind)}|no\s+{re.escape(kind)})[^\n]*(?:\n|$)",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return pattern.sub("", scoped)
+
+
+def _insert_top_level_item(scoped: str, insert_at: int, text: str) -> str:
+    insert_text = text.rstrip()
+    if insert_at > 0 and scoped[insert_at - 1] != "\n":
+        insert_text = "\n" + insert_text
+    if not insert_text.endswith("\n"):
+        insert_text += "\n"
+    if insert_at < len(scoped) and scoped[insert_at:insert_at + 1] != "\n":
+        insert_text += "\n"
+    return scoped[:insert_at] + insert_text + scoped[insert_at:]
 
 
 def _section_end_insert_offset(scoped: str) -> int:

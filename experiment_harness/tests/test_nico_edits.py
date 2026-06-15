@@ -211,6 +211,88 @@ module user.profile_service {
         self.assertLess(interface_insert, module_effects)
         self.assertGreater(impl_insert, changed.index("implementation rust"))
 
+    def test_update_module_imports_and_missing_effects_insert_top_level_items(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec {
+    intent "pure value types"
+
+    interface {
+      type UserProfile
+    }
+
+    // 无 effects：所有函数均为纯计算，不读取外部状态
+    // 无 imports：user.types 不依赖任何其他模块
+  }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip()
+        )
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [
+            {
+                "op": "update_module_imports",
+                "imports": ["time.clock"],
+                "mode": "merge",
+            },
+            {
+                "op": "update_module_effects",
+                "effects": ["reads_clock"],
+                "mode": "merge",
+            },
+        ])
+
+        self.assertIn("status: applied", result)
+        changed = (workspace.root / "src/user/types.nico").read_text(encoding="utf-8")
+        self.assertIn("    imports [time.clock]", changed)
+        self.assertIn("    effects [reads_clock]", changed)
+        self.assertNotIn("无 effects", changed)
+        self.assertNotIn("无 imports", changed)
+        self.assertLess(changed.index("imports [time.clock]"), changed.index("interface {"))
+        self.assertLess(changed.index("interface {"), changed.index("effects [reads_clock]"))
+
+    def test_update_module_effects_does_not_match_function_effects(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module session.store {
+  spec {
+    imports [session.types]
+
+    interface {
+      fn load_session(id: SessionId) -> Option
+        effects [db.read]
+
+      fn save_session(info: SessionInfo) -> ()
+        effects [db.write]
+
+      fn revoke_session(id: SessionId) -> ()
+        effects [db.read, db.write]
+    }
+
+    effects [db.read, db.write]
+  }
+  checks { }
+  implementation rust { }
+}
+""".lstrip(),
+            rel="src/session/store.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/session/store.nico", [{
+            "op": "update_module_effects",
+            "effects": ["reads_clock"],
+            "mode": "merge",
+        }])
+
+        self.assertIn("status: applied", result)
+        changed = (workspace.root / "src/session/store.nico").read_text(encoding="utf-8")
+        self.assertIn("fn revoke_session(id: SessionId) -> ()\n        effects [db.read, db.write]", changed)
+        self.assertIn("    effects [db.read, db.write, reads_clock]", changed)
+
     def test_structural_insert_missing_interface_is_atomic(self) -> None:
         workspace = self.prepare_workspace(
             """

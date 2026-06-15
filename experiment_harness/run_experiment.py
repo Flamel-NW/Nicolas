@@ -21,6 +21,7 @@ backward-compatible direct-mode default.
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -462,9 +463,9 @@ def get_tools(condition: str) -> list[dict]:
             "condition C task workspace. Use this to make small audited source changes "
             "instead of rewriting complete modules in the final answer. Supports these "
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
-            "replace_identifier, insert_interface_item, update_module_effects, "
+            "replace_identifier, insert_interface_item, update_module_imports, update_module_effects, "
             "insert_implementation_item. Exact-anchor edits are scoped to surface, checks, "
-            "implementation, or file. Structural ops locate the interface, module effects, "
+            "implementation, or file. Structural ops locate the interface, module imports/effects, "
             "or implementation block for you. The entire edit batch is atomic: any failed check "
             "leaves the file unchanged."
         ),
@@ -490,6 +491,7 @@ def get_tools(condition: str) -> list[dict]:
                                     "insert_before_section_end",
                                     "replace_identifier",
                                     "insert_interface_item",
+                                    "update_module_imports",
                                     "update_module_effects",
                                     "insert_implementation_item",
                                 ],
@@ -520,10 +522,15 @@ def get_tools(condition: str) -> list[dict]:
                                 "items": {"type": "string"},
                                 "description": "Effects for update_module_effects, e.g. ['reads_clock', 'metrics.write'].",
                             },
+                            "imports": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Imports for update_module_imports, e.g. ['time.clock', 'metrics.recorder'].",
+                            },
                             "mode": {
                                 "type": "string",
                                 "enum": ["merge", "replace"],
-                                "description": "For update_module_effects: merge appends missing effects; replace rewrites the list.",
+                                "description": "For update_module_imports or update_module_effects: merge appends missing items; replace rewrites the list.",
                             },
                         },
                         "required": ["op"],
@@ -742,13 +749,43 @@ def build_validation_summary(
 def _missing_c_final_sections(response: str | None) -> list[str]:
     if not response or not response.strip():
         return []
-    required = [
-        "Summary:",
-        "Evidence:",
-        "Boundary/effects check:",
-        "Validation status:",
-    ]
-    return [section for section in required if section not in response]
+    required = {
+        "Summary": "summary",
+        "Evidence": "evidence",
+        "Boundary/effects check": "boundary/effects check",
+        "Validation status": "validation status",
+    }
+    found = _c_final_section_headings(response)
+    return [label for label, normalized in required.items() if normalized not in found]
+
+
+def _c_final_section_headings(response: str) -> set[str]:
+    headings: set[str] = set()
+    for line in response.splitlines():
+        normalized = _normalize_c_final_heading(line)
+        if normalized:
+            headings.add(normalized)
+    return headings
+
+
+def _normalize_c_final_heading(line: str) -> str | None:
+    text = line.strip()
+    if not text:
+        return None
+    text = re.sub(r"^#{1,6}\s+", "", text).strip()
+    text = re.sub(r"^[-*]\s+", "", text).strip()
+    text = re.sub(r"^\*\*(.*?)\*\*:?\s*$", r"\1", text).strip()
+    text = re.sub(r"^__(.*?)__:?\s*$", r"\1", text).strip()
+    text = text.rstrip(":").strip().lower()
+    aliases = {
+        "summary": "summary",
+        "evidence": "evidence",
+        "boundary/effects check": "boundary/effects check",
+        "boundary / effects check": "boundary/effects check",
+        "boundary and effects check": "boundary/effects check",
+        "validation status": "validation status",
+    }
+    return aliases.get(text)
 
 
 def _claims_no_workspace_changes(response: str | None) -> bool:
