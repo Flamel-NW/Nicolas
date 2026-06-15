@@ -62,7 +62,7 @@ def apply_nico_edits(
         return "Error: edit_nico requires a condition C task workspace."
 
     try:
-        target_path = resolve_workspace_file(workspace, path, suffix=".nico")
+        target_path = resolve_workspace_file(workspace, _normalize_nico_edit_path(path), suffix=".nico")
         before = target_path.read_text(encoding="utf-8")
         after, summaries = _apply_edit_batch(before, edits)
         if not dry_run and after != before:
@@ -71,6 +71,13 @@ def apply_nico_edits(
         return f"Error: {e}"
 
     return _format_edit_result(workspace, target_path, before, after, summaries, dry_run=dry_run)
+
+
+def _normalize_nico_edit_path(path: str) -> str:
+    requested = Path(str(path).strip())
+    if requested.suffix == ".rs":
+        return requested.with_suffix(".nico").as_posix()
+    return str(path).strip()
 
 
 def _apply_edit_batch(source: str, edits: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:

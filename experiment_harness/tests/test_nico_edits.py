@@ -383,6 +383,33 @@ module user.types {
         self.assertIn("status: dry_run", result)
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
+    def test_edit_nico_maps_rs_source_path_to_nico_workspace_file(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.profile_service {
+  spec {
+    interface {
+      fn get_profile(id: UserId) -> Option
+    }
+    effects [reads_clock]
+  }
+  checks { }
+  implementation rust { }
+}
+""".lstrip(),
+            rel="src/user/profile_service.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/user/profile_service.rs", [{
+            "op": "update_module_effects",
+            "effects": ["db.read"],
+            "mode": "merge",
+        }])
+
+        self.assertIn("status: applied", result)
+        changed = (workspace.root / "src/user/profile_service.nico").read_text(encoding="utf-8")
+        self.assertIn("effects [reads_clock, db.read]", changed)
+
     def test_rejects_unsafe_suffix_and_non_c_tool_use(self) -> None:
         workspace = self.prepare_workspace("module user.types { spec { } checks { } implementation rust { } }\n")
 
@@ -392,7 +419,7 @@ module user.types {
             "target": "x",
             "replacement": "y",
         }])
-        wrong_suffix = apply_nico_edits(workspace, "src/user/types.rs", [{
+        wrong_suffix = apply_nico_edits(workspace, "src/user/types.txt", [{
             "op": "replace_text",
             "section": "file",
             "target": "x",

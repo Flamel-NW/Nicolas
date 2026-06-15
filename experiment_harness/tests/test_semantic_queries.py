@@ -44,6 +44,8 @@ class SemanticQueriesTest(unittest.TestCase):
             ("session.types", "src/session/types.rs"),
             ("session.store", "src/session/store.rs"),
             ("session.service", "src/session/service.rs"),
+            ("metrics.recorder", "src/metrics/recorder.rs"),
+            ("rate.limiter", "src/rate/limiter.rs"),
         ]
         conn.executemany(
             "INSERT INTO modules (name, source, schema_version) VALUES (?, ?, 'test')",
@@ -63,6 +65,9 @@ class SemanticQueriesTest(unittest.TestCase):
                 ("session.types", "user.types"),
                 ("session.store", "session.types"),
                 ("session.service", "session.store"),
+                ("session.service", "cache.kv"),
+                ("rate.limiter", "cache.kv"),
+                ("rate.limiter", "metrics.recorder"),
             ],
         )
         conn.executemany(
@@ -105,6 +110,9 @@ class SemanticQueriesTest(unittest.TestCase):
                 ("user.profile_service", None, "reads_clock", "module"),
                 ("user.profile_service", None, "db.read", "module"),
                 ("user.profile_service", None, "audit.write", "module"),
+                ("session.service", None, "reads_clock", "module"),
+                ("rate.limiter", None, "metrics.write", "module"),
+                ("rate.limiter", None, "reads_clock", "module"),
             ],
         )
         conn.executemany(
@@ -199,6 +207,67 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn("effect_update_candidates:", out)
         self.assertIn("user.types action=add_effect has_effect=false", out)
         self.assertIn("user.profile_service action=verify_no_change has_effect=true", out)
+        self.assertIn("source_effect_update_plan:", out)
+        self.assertIn(
+            "user.types edit_path=src/user/types.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "audit.log edit_path=src/audit/log.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "session.types edit_path=src/session/types.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "user.store edit_path=src/user/store.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "session.store edit_path=src/session/store.nico action=add_module_effect effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "user.profile_service edit_path=src/user/profile_service.nico action=verify_no_change effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "session.service edit_path=src/session/service.nico action=verify_no_change effect=reads_clock",
+            out,
+        )
+
+    def test_affected_modules_source_effect_plan_for_cache_metrics(self) -> None:
+        out = run_semantic_query(
+            {
+                "query": "affected_modules",
+                "module": "cache.kv",
+                "effect": "metrics.write",
+            },
+            self.db_path,
+        )
+
+        self.assertIn("source_effect_update_plan:", out)
+        self.assertIn(
+            "cache.kv edit_path=src/cache/kv.nico action=add_module_effect effect=metrics.write",
+            out,
+        )
+        self.assertIn(
+            "session.service edit_path=src/session/service.nico action=add_module_effect effect=metrics.write",
+            out,
+        )
+        self.assertIn(
+            "user.profile_service edit_path=src/user/profile_service.nico action=add_module_effect effect=metrics.write",
+            out,
+        )
+        self.assertIn(
+            "rate.limiter edit_path=src/rate/limiter.nico action=verify_no_change effect=metrics.write",
+            out,
+        )
 
 
 if __name__ == "__main__":

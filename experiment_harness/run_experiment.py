@@ -459,8 +459,10 @@ def get_tools(condition: str) -> list[dict]:
     edit_nico = {
         "name": "edit_nico",
         "description": (
-            "Apply exact-anchor structured edits to a Nicolas .nico source file in the "
-            "condition C task workspace. Use this to make small audited source changes "
+            "Apply exact-anchor structured edits to a Nicolas source file in the "
+            "condition C task workspace. The path may be a workspace .nico path or a "
+            "DB source path ending in .rs; .rs paths are normalized to the matching "
+            ".nico workspace file. Use this to make small audited source changes "
             "instead of rewriting complete modules in the final answer. Supports these "
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
             "replace_identifier, insert_interface_item, update_module_imports, update_module_effects, "
@@ -474,7 +476,7 @@ def get_tools(condition: str) -> list[dict]:
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the workspace .nico file, e.g. src/user/types.nico.",
+                    "description": "Path to the workspace .nico file, or a DB source path ending in .rs.",
                 },
                 "edits": {
                     "type": "array",

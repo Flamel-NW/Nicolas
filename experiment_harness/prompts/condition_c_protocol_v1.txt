@@ -10,7 +10,9 @@ Use the condition C tools to apply the requested changes to the task workspace:
 2. Narrow source read: use `read_nico_section` for the smallest relevant source
    section. Use `read_file` only as a last-resort full-file fallback.
 3. Required edits: use `edit_nico` to apply every source change to the
-   workspace. Prefer structural ops (`insert_interface_item`,
+   workspace. `edit_nico` accepts either `.nico` workspace paths or DB source
+   paths ending in `.rs`; `.rs` paths are normalized to the matching `.nico`
+   workspace file. Prefer structural ops (`insert_interface_item`,
    `update_module_imports`, `update_module_effects`,
    `insert_implementation_item`) for interface functions, module-level imports,
    module-level effects, and implementation functions. Use exact-anchor ops for
@@ -19,6 +21,11 @@ Use the condition C tools to apply the requested changes to the task workspace:
    module-level `effects [...]`; use `update_module_imports` and
    `update_module_effects` so function-level effects are not matched by
    mistake.
+   When `semantic_query affected_modules` returns `source_effect_update_plan`,
+   every `action=add_module_effect` row is a required workspace source edit:
+   call `edit_nico` with `update_module_effects` for that module. Do not treat
+   DB `propagated_effects` as a substitute for updating the `.nico` module-level
+   `effects [...]` source.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass.

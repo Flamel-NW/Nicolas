@@ -397,6 +397,9 @@ def _affected_modules(
     direct_importers = _reverse_import_paths(conn, provider, transitive=False)
     dependent_rows = _reverse_import_paths(conn, provider, transitive=transitive)
     candidate_modules = [provider] + [row["module"] for row in dependent_rows]
+    candidate_reasons = {provider: "changed_or_provider_module"}
+    for row in dependent_rows:
+        candidate_reasons[row["module"]] = f"dependent_via_import_path:{' -> '.join(row['path'])}"
 
     lines = [
         "affected_modules:",
@@ -443,6 +446,18 @@ def _affected_modules(
     lines.append("effect_update_candidates:")
     if effect:
         lines.extend(_effect_update_candidate_lines(conn, candidate_modules, effect, source_map))
+    else:
+        lines.append("- none (effect_filter required)")
+
+    lines.append("source_effect_update_plan:")
+    if effect:
+        lines.extend(_source_effect_update_plan_lines(
+            conn,
+            candidate_modules,
+            effect,
+            source_map,
+            candidate_reasons,
+        ))
     else:
         lines.append("- none (effect_filter required)")
     return "\n".join(lines)
@@ -511,6 +526,41 @@ def _effect_update_candidate_lines(
             f"source={source_map.get(module, 'unknown')}"
         )
     return lines or ["- none"]
+
+
+def _source_effect_update_plan_lines(
+    conn: sqlite3.Connection,
+    modules: list[str],
+    effect: str,
+    source_map: dict[str, str],
+    candidate_reasons: dict[str, str],
+) -> list[str]:
+    lines: list[str] = []
+    for module in modules:
+        current_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+            (module,),
+            None,
+        )
+        has_effect = effect in current_effects
+        action = "verify_no_change" if has_effect else "add_module_effect"
+        source = source_map.get(module, "unknown")
+        edit_path = _source_to_nico_edit_path(source)
+        reason = candidate_reasons.get(module, "candidate_module")
+        lines.append(
+            f"- {module} edit_path={edit_path} action={action} effect={effect} "
+            f"current_module_effects={_compact_list(current_effects)} reason={reason}"
+        )
+    return lines or ["- none"]
+
+
+def _source_to_nico_edit_path(source: str) -> str:
+    if source.endswith(".rs"):
+        return source[:-3] + ".nico"
+    if source.endswith(".nico"):
+        return source
+    return source or "unknown"
 
 
 def _column(conn: sqlite3.Connection, sql: str, *params: str) -> list[str]:
