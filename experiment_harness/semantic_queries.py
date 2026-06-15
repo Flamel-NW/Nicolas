@@ -71,6 +71,7 @@ def run_semantic_query(params: dict[str, Any], trusted_path: Path) -> str:
                     conn,
                     _required(params, "module"),
                     type_name=_optional(params, "type_name"),
+                    function=_optional(params, "function"),
                     effect=_optional(params, "effect"),
                     transitive=_as_bool(params.get("transitive"), default=True),
                 )
@@ -374,10 +375,14 @@ def _affected_modules(
     conn: sqlite3.Connection,
     module: str,
     type_name: str | None,
+    function: str | None,
     effect: str | None,
     transitive: bool,
 ) -> str:
     _ensure_module(conn, module)
+    if function and not _function_exists(conn, module, function):
+        return f"Error: function '{module}.{function}' not found"
+
     provider = module
     type_provider_line = "none"
     if type_name:
@@ -405,6 +410,7 @@ def _affected_modules(
         "affected_modules:",
         f"source_module: {module}",
         f"type_filter: {type_name or 'none'}",
+        f"function_filter: {function or 'none'}",
         f"effect_filter: {effect or 'none'}",
         f"transitive: {str(transitive).lower()}",
         f"direct_type_provider: {type_provider_line}",
@@ -460,6 +466,19 @@ def _affected_modules(
         ))
     else:
         lines.append("- none (effect_filter required)")
+
+    lines.append("source_edit_plan:")
+    lines.extend(_source_edit_plan_lines(
+        conn,
+        module=module,
+        provider=provider,
+        candidate_modules=candidate_modules,
+        type_name=type_name,
+        function=function,
+        effect=effect,
+        source_map=source_map,
+        candidate_reasons=candidate_reasons,
+    ))
     return "\n".join(lines)
 
 
@@ -551,6 +570,112 @@ def _source_effect_update_plan_lines(
         lines.append(
             f"- {module} edit_path={edit_path} action={action} effect={effect} "
             f"current_module_effects={_compact_list(current_effects)} reason={reason}"
+        )
+    return lines or ["- none"]
+
+
+def _source_edit_plan_lines(
+    conn: sqlite3.Connection,
+    module: str,
+    provider: str,
+    candidate_modules: list[str],
+    type_name: str | None,
+    function: str | None,
+    effect: str | None,
+    source_map: dict[str, str],
+    candidate_reasons: dict[str, str],
+) -> list[str]:
+    lines: list[str] = []
+    if type_name:
+        lines.extend(_provider_type_edit_plan_lines(provider, type_name, source_map))
+    if function:
+        lines.extend(_function_effect_edit_plan_lines(conn, module, function, effect, source_map))
+    if effect:
+        lines.extend(_module_effect_edit_plan_lines(
+            conn,
+            candidate_modules,
+            effect,
+            source_map,
+            candidate_reasons,
+        ))
+    if not lines:
+        return ["- none (type_name, function, or effect required)"]
+    return lines
+
+
+def _provider_type_edit_plan_lines(
+    provider: str,
+    type_name: str,
+    source_map: dict[str, str],
+) -> list[str]:
+    edit_path = _source_to_nico_edit_path(source_map.get(provider, "unknown"))
+    return [
+        f"- {provider} edit_path={edit_path} action=update_type_surface "
+        f"type={type_name} categories=interface_type,interface_function,"
+        "implementation,checks_examples,imports_effects "
+        "ops=replace_interface_item,update_interface_function_effects,"
+        "replace_implementation_function,update_module_imports,update_module_effects "
+        "required_edit=true reason=provider_module_type_shape_changed"
+    ]
+
+
+def _function_effect_edit_plan_lines(
+    conn: sqlite3.Connection,
+    module: str,
+    function: str,
+    effect: str | None,
+    source_map: dict[str, str],
+) -> list[str]:
+    if not effect:
+        return [
+            f"- {module}.{function} action=none required_edit=false "
+            "reason=function_effect_plan_requires_effect_filter"
+        ]
+    current_effects = _filtered_effects(
+        conn,
+        "SELECT effect FROM effects WHERE module_name=? AND function_name=? ORDER BY effect",
+        (module, function),
+        None,
+    )
+    has_effect = effect in current_effects
+    action = "verify_function_no_change" if has_effect else "add_function_effect"
+    required = not has_effect
+    edit_path = _source_to_nico_edit_path(source_map.get(module, "unknown"))
+    no_op = " no_op_edit=forbidden" if has_effect else ""
+    return [
+        f"- {module}.{function} edit_path={edit_path} action={action} "
+        f"effect={effect} current_function_effects={_compact_list(current_effects)} "
+        f"op=update_interface_function_effects required_edit={str(required).lower()}"
+        f"{no_op} reason=function_effect_update"
+    ]
+
+
+def _module_effect_edit_plan_lines(
+    conn: sqlite3.Connection,
+    modules: list[str],
+    effect: str,
+    source_map: dict[str, str],
+    candidate_reasons: dict[str, str],
+) -> list[str]:
+    lines: list[str] = []
+    for module in modules:
+        current_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+            (module,),
+            None,
+        )
+        has_effect = effect in current_effects
+        action = "verify_no_change" if has_effect else "add_module_effect"
+        required = not has_effect
+        edit_path = _source_to_nico_edit_path(source_map.get(module, "unknown"))
+        reason = candidate_reasons.get(module, "candidate_module")
+        no_op = " no_op_edit=forbidden" if has_effect else ""
+        lines.append(
+            f"- {module} edit_path={edit_path} action={action} effect={effect} "
+            f"current_module_effects={_compact_list(current_effects)} "
+            f"op=update_module_effects required_edit={str(required).lower()}"
+            f"{no_op} reason={reason}"
         )
     return lines or ["- none"]
 

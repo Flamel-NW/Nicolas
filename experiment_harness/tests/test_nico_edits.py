@@ -293,6 +293,85 @@ module session.store {
         self.assertIn("fn revoke_session(id: SessionId) -> ()\n        effects [db.read, db.write]", changed)
         self.assertIn("    effects [db.read, db.write, reads_clock]", changed)
 
+    def test_structural_ops_replace_interface_items_and_implementation_function(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module cache.kv {
+  spec {
+    imports [time.clock]
+
+    interface {
+      type CacheKey    // 不透明 cache key；内部表示：String
+      type CacheTtl    // 不透明 TTL 时长；内部表示：u64
+
+      fn get(key: CacheKey) -> Option
+        effects [reads_clock]
+        // 读取 time.clock.now() 检查条目是否过期；过期则返回 None
+
+      fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()
+        effects [reads_clock]
+    }
+
+    effects [reads_clock]
+  }
+
+  checks { }
+
+  implementation rust {
+    /// Records a cache hit/miss metric via `metrics.recorder::record()`.
+    pub fn get(key: CacheKey) -> Option<String> {
+        // Record a cache miss metric (skeleton).
+        None
+    }
+
+    /// Records a cache hit/miss metric via `metrics.recorder::record()`.
+    pub fn set(key: CacheKey, value: String, ttl: CacheTtl) {
+        let _ = (key, value, ttl);
+    }
+  }
+}
+""".lstrip(),
+            rel="src/cache/kv.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/cache/kv.nico", [
+            {
+                "op": "replace_interface_item",
+                "item_kind": "type",
+                "name": "CacheTtl",
+                "replacement": "      type CacheTtl    // 不透明 TTL 时长；内部表示：u64（秒）",
+            },
+            {
+                "op": "update_interface_function_effects",
+                "function": "get",
+                "effects": ["metrics.write"],
+                "mode": "merge",
+            },
+            {
+                "op": "replace_implementation_function",
+                "function": "get",
+                "replacement": """
+    pub fn get(key: CacheKey) -> Option<String> {
+        crate::metrics::recorder::record("cache.get", 1);
+        let _ = key;
+        None
+    }
+""".rstrip(),
+            },
+        ])
+
+        self.assertIn("status: applied", result)
+        self.assertIn("replace_interface_item section=surface.interface matches=1", result)
+        self.assertIn("update_interface_function_effects section=surface.interface matches=1", result)
+        self.assertIn("replace_implementation_function section=implementation matches=1", result)
+        changed = (workspace.root / "src/cache/kv.nico").read_text(encoding="utf-8")
+        self.assertIn("type CacheTtl    // 不透明 TTL 时长；内部表示：u64（秒）", changed)
+        self.assertIn("fn get(key: CacheKey) -> Option\n        effects [reads_clock, metrics.write]", changed)
+        self.assertIn('crate::metrics::recorder::record("cache.get", 1);', changed)
+        self.assertIn("pub fn set(key: CacheKey, value: String, ttl: CacheTtl)", changed)
+        self.assertIn("fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()\n        effects [reads_clock]", changed)
+        self.assertIn("    effects [reads_clock]", changed)
+
     def test_structural_insert_missing_interface_is_atomic(self) -> None:
         workspace = self.prepare_workspace(
             """

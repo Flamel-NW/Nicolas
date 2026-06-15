@@ -416,6 +416,8 @@ def get_tools(condition: str) -> list[dict]:
             "Use this before SQL for common structure, dependency, caller, and effect-chain lookups. "
             "Supported query values: module_surface, module_dependents, type_dependents, "
             "function_callers, effect_chain, affected_modules."
+            " For affected_modules, pass function when the requested effect update is"
+            " scoped to a specific function."
         ),
         "input_schema": {
             "type": "object",
@@ -465,11 +467,12 @@ def get_tools(condition: str) -> list[dict]:
             ".nico workspace file. Use this to make small audited source changes "
             "instead of rewriting complete modules in the final answer. Supports these "
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
-            "replace_identifier, insert_interface_item, update_module_imports, update_module_effects, "
-            "insert_implementation_item. Exact-anchor edits are scoped to surface, checks, "
+            "replace_identifier, insert_interface_item, replace_interface_item, "
+            "update_interface_function_effects, update_module_imports, update_module_effects, "
+            "insert_implementation_item, replace_implementation_function. Exact-anchor edits are scoped to surface, checks, "
             "implementation, or file. Structural ops locate the interface, module imports/effects, "
-            "or implementation block for you. The entire edit batch is atomic: any failed check "
-            "leaves the file unchanged."
+            "interface function effects, or implementation function for you. The entire edit batch "
+            "is atomic: any failed check leaves the file unchanged."
         ),
         "input_schema": {
             "type": "object",
@@ -493,9 +496,12 @@ def get_tools(condition: str) -> list[dict]:
                                     "insert_before_section_end",
                                     "replace_identifier",
                                     "insert_interface_item",
+                                    "replace_interface_item",
+                                    "update_interface_function_effects",
                                     "update_module_imports",
                                     "update_module_effects",
                                     "insert_implementation_item",
+                                    "replace_implementation_function",
                                 ],
                             },
                             "section": {
@@ -507,9 +513,22 @@ def get_tools(condition: str) -> list[dict]:
                                 "type": "string",
                                 "description": "Exact anchor text or identifier to match.",
                             },
+                            "item_kind": {
+                                "type": "string",
+                                "enum": ["type", "fn"],
+                                "description": "Interface item kind for replace_interface_item.",
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Interface item name for replace_interface_item.",
+                            },
+                            "function": {
+                                "type": "string",
+                                "description": "Function name for update_interface_function_effects or replace_implementation_function.",
+                            },
                             "replacement": {
                                 "type": "string",
-                                "description": "Replacement text for replace_text or replace_identifier.",
+                                "description": "Replacement text for replace_text, replace_identifier, replace_interface_item, or replace_implementation_function.",
                             },
                             "text": {
                                 "type": "string",

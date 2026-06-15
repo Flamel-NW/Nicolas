@@ -30,17 +30,23 @@ VALID_OPS = {
     "insert_before_section_end",
     "replace_identifier",
     "insert_interface_item",
+    "replace_interface_item",
+    "update_interface_function_effects",
     "update_module_imports",
     "update_module_effects",
     "insert_implementation_item",
+    "replace_implementation_function",
 }
 VALID_SECTIONS = {"file", "surface", "checks", "implementation"}
 INSERT_OPS = {"insert_before", "insert_after", "insert_before_section_end"}
 STRUCTURAL_OPS = {
     "insert_interface_item",
+    "replace_interface_item",
+    "update_interface_function_effects",
     "update_module_imports",
     "update_module_effects",
     "insert_implementation_item",
+    "replace_implementation_function",
 }
 MAX_DIFF_CHARS = 6000
 MAX_CONTEXT_CHARS = 800
@@ -156,11 +162,36 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         scoped = source[start:end]
         changed, count = _insert_before_section_end(scoped, text)
         section = "surface.interface"
+    elif op == "replace_interface_item":
+        item_kind = _interface_item_kind(edit, index)
+        name = _identifier_value(edit, "name", index)
+        replacement = _string_value(edit, "replacement", index)
+        start, end = extract_nested_block_span(source, "surface", "interface")
+        scoped = source[start:end]
+        changed, count = _replace_interface_item(scoped, item_kind, name, replacement)
+        section = "surface.interface"
+    elif op == "update_interface_function_effects":
+        function = _identifier_value(edit, "function", index)
+        effects = _string_list(edit, "effects", index)
+        mode = str(edit.get("mode", "merge")).strip() or "merge"
+        if mode not in {"merge", "replace"}:
+            raise NicoEditError(f"edit #{index}: mode must be 'merge' or 'replace'")
+        start, end = extract_nested_block_span(source, "surface", "interface")
+        scoped = source[start:end]
+        changed, count = _update_interface_function_effects(scoped, function, effects, mode)
+        section = "surface.interface"
     elif op == "insert_implementation_item":
         text = _string_value(edit, "text", index)
         start, end = extract_nico_section_span(source, "implementation")
         scoped = source[start:end]
         changed, count = _insert_before_section_end(scoped, text)
+        section = "implementation"
+    elif op == "replace_implementation_function":
+        function = _identifier_value(edit, "function", index)
+        replacement = _string_value(edit, "replacement", index)
+        start, end = extract_nico_section_span(source, "implementation")
+        scoped = source[start:end]
+        changed, count = _replace_implementation_function(scoped, function, replacement)
         section = "implementation"
     elif op == "update_module_imports":
         imports = _string_list(edit, "imports", index)
@@ -280,6 +311,153 @@ def _update_module_imports(scoped: str, requested_imports: list[str], mode: str)
                 next_imports.append(import_name)
     replacement = f"imports [{', '.join(next_imports)}]"
     return scoped[:imports_start] + replacement + scoped[imports_end:], 1
+
+
+def _replace_interface_item(
+    scoped: str,
+    item_kind: str,
+    name: str,
+    replacement: str,
+) -> tuple[str, int]:
+    start, end = _interface_item_span(scoped, item_kind, name)
+    replacement_text = _normalized_item_replacement(scoped, start, end, replacement)
+    return scoped[:start] + replacement_text + scoped[end:], 1
+
+
+def _update_interface_function_effects(
+    scoped: str,
+    function: str,
+    requested_effects: list[str],
+    mode: str,
+) -> tuple[str, int]:
+    start, end = _interface_item_span(scoped, "fn", function)
+    item = scoped[start:end]
+    span = _interface_function_effects_span(item)
+    if span is None:
+        insert_at = _first_line_end(item)
+        effect_indent = _interface_effect_indent(item)
+        insert_text = f"\n{effect_indent}effects [{', '.join(requested_effects)}]"
+        changed = item[:insert_at] + insert_text + item[insert_at:]
+    else:
+        effects_start, effects_end, current_effects = span
+        if mode == "replace":
+            next_effects = requested_effects
+        else:
+            next_effects = list(current_effects)
+            for effect in requested_effects:
+                if effect not in next_effects:
+                    next_effects.append(effect)
+        changed = item[:effects_start] + f"effects [{', '.join(next_effects)}]" + item[effects_end:]
+    return scoped[:start] + changed + scoped[end:], 1
+
+
+def _replace_implementation_function(
+    scoped: str,
+    function: str,
+    replacement: str,
+) -> tuple[str, int]:
+    matches = _implementation_function_spans(scoped, function)
+    if len(matches) != 1:
+        raise NicoEditError(_implementation_function_diagnostic(scoped, function, len(matches)))
+    start, end = matches[0]
+    replacement_text = _normalized_item_replacement(scoped, start, end, replacement)
+    return scoped[:start] + replacement_text + scoped[end:], 1
+
+
+def _interface_item_span(scoped: str, item_kind: str, name: str) -> tuple[int, int]:
+    open_brace = scoped.find("{")
+    if open_brace < 0:
+        raise NicoEditError("surface.interface block has no opening brace")
+    close_brace = scoped.rfind("}")
+    if close_brace < open_brace:
+        raise NicoEditError("surface.interface block has no closing brace")
+
+    body = scoped[open_brace + 1:close_brace]
+    pattern = re.compile(rf"(?m)^[ \t]*{re.escape(item_kind)}\s+{re.escape(name)}\b")
+    matches = list(pattern.finditer(body))
+    if len(matches) != 1:
+        raise NicoEditError(_interface_item_diagnostic(scoped, item_kind, name, len(matches)))
+
+    item_start = open_brace + 1 + matches[0].start()
+    next_match = re.search(r"(?m)^[ \t]*(?:type|fn)\s+\w+\b", body[matches[0].end():])
+    if next_match is None:
+        item_end = close_brace
+    else:
+        item_end = open_brace + 1 + matches[0].end() + next_match.start()
+    while item_end > item_start and scoped[item_end - 1] == "\n":
+        item_end -= 1
+    return item_start, item_end
+
+
+def _interface_function_effects_span(item: str) -> tuple[int, int, list[str]] | None:
+    masked = mask_non_code(item)
+    match = re.search(r"\beffects\s*\[", masked)
+    if match is None:
+        return None
+    bracket_start = masked.find("[", match.start(), match.end())
+    bracket_end = masked.find("]", bracket_start)
+    if bracket_end < 0:
+        raise NicoEditError("interface function effects list has no closing bracket")
+    current = _parse_comma_list(item[bracket_start + 1:bracket_end])
+    return match.start(), bracket_end + 1, current
+
+
+def _implementation_function_spans(scoped: str, function: str) -> list[tuple[int, int]]:
+    masked = mask_non_code(scoped)
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(function)}\s*\("
+    )
+    spans: list[tuple[int, int]] = []
+    for match in pattern.finditer(masked):
+        open_brace = masked.find("{", match.end())
+        if open_brace < 0:
+            raise NicoEditError(f"implementation function '{function}' has no opening brace")
+        close_brace = find_matching_brace(masked, open_brace)
+        if close_brace < 0:
+            raise NicoEditError(f"implementation function '{function}' has no closing brace")
+        line_start = scoped.rfind("\n", 0, match.start()) + 1
+        spans.append((line_start, close_brace + 1))
+    return spans
+
+
+def _interface_item_diagnostic(scoped: str, item_kind: str, name: str, count: int) -> str:
+    return "\n".join([
+        f"interface {item_kind} '{name}' matched {count} time(s), expected 1",
+        "section: surface.interface",
+        f"match_count: {count}",
+        "expected_count: 1",
+        f"section_tail_context:\n{_tail_context(scoped)}",
+    ])
+
+
+def _implementation_function_diagnostic(scoped: str, function: str, count: int) -> str:
+    return "\n".join([
+        f"implementation function '{function}' matched {count} time(s), expected 1",
+        "section: implementation",
+        f"match_count: {count}",
+        "expected_count: 1",
+        f"section_tail_context:\n{_tail_context(scoped)}",
+    ])
+
+
+def _normalized_item_replacement(scoped: str, start: int, end: int, replacement: str) -> str:
+    replacement_text = replacement.rstrip()
+    if start > 0 and scoped[start - 1] != "\n":
+        replacement_text = "\n" + replacement_text
+    if end < len(scoped) and scoped[end:end + 1] == "\n":
+        replacement_text += "\n"
+    return replacement_text
+
+
+def _first_line_end(text: str) -> int:
+    newline = text.find("\n")
+    return len(text) if newline < 0 else newline
+
+
+def _interface_effect_indent(item: str) -> str:
+    first_line = item.splitlines()[0] if item.splitlines() else ""
+    base_indent = first_line[:len(first_line) - len(first_line.lstrip())]
+    return base_indent + "  "
 
 
 def _module_effects_span(scoped: str) -> tuple[int, int, list[str]]:
@@ -547,6 +725,13 @@ def _identifier_value(edit: dict[str, Any], key: str, index: int) -> str:
     value = _non_empty_string(edit, key, index)
     if not IDENTIFIER_RE.fullmatch(value):
         raise NicoEditError(f"edit #{index}: field '{key}' must be a Rust-like identifier")
+    return value
+
+
+def _interface_item_kind(edit: dict[str, Any], index: int) -> str:
+    value = _non_empty_string(edit, "item_kind", index)
+    if value not in {"type", "fn"}:
+        raise NicoEditError(f"edit #{index}: item_kind must be 'type' or 'fn'")
     return value
 
 

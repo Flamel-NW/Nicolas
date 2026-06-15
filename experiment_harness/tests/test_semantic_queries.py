@@ -240,6 +240,24 @@ class SemanticQueriesTest(unittest.TestCase):
             "session.service edit_path=src/session/service.nico action=verify_no_change effect=reads_clock",
             out,
         )
+        self.assertIn("source_edit_plan:", out)
+        self.assertIn(
+            "user.types edit_path=src/user/types.nico action=update_type_surface "
+            "type=UserProfile categories=interface_type,interface_function,implementation,checks_examples,imports_effects",
+            out,
+        )
+        self.assertIn(
+            "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
+            "effect=reads_clock",
+            out,
+        )
+        self.assertIn("required_edit=true", out)
+        self.assertIn(
+            "user.profile_service edit_path=src/user/profile_service.nico action=verify_no_change "
+            "effect=reads_clock",
+            out,
+        )
+        self.assertIn("required_edit=false no_op_edit=forbidden", out)
 
     def test_affected_modules_source_effect_plan_for_cache_metrics(self) -> None:
         out = run_semantic_query(
@@ -266,6 +284,32 @@ class SemanticQueriesTest(unittest.TestCase):
         )
         self.assertIn(
             "rate.limiter edit_path=src/rate/limiter.nico action=verify_no_change effect=metrics.write",
+            out,
+        )
+        self.assertIn(
+            "rate.limiter edit_path=src/rate/limiter.nico action=verify_no_change "
+            "effect=metrics.write",
+            out,
+        )
+        self.assertIn("no_op_edit=forbidden", out)
+
+    def test_affected_modules_function_effect_plan_for_cache_metrics(self) -> None:
+        out = run_semantic_query(
+            {
+                "query": "affected_modules",
+                "module": "cache.kv",
+                "function": "get",
+                "effect": "metrics.write",
+            },
+            self.db_path,
+        )
+
+        self.assertIn("function_filter: get", out)
+        self.assertIn("source_edit_plan:", out)
+        self.assertIn(
+            "cache.kv.get edit_path=src/cache/kv.nico action=add_function_effect "
+            "effect=metrics.write current_function_effects=reads_clock "
+            "op=update_interface_function_effects required_edit=true",
             out,
         )
 
