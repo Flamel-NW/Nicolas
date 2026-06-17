@@ -30,7 +30,7 @@ from pathlib import Path
 import anthropic
 from dotenv import load_dotenv, find_dotenv
 
-from nico_edits import apply_nico_edits
+from nico_edits import apply_nico_edits, validate_nico_source_structure
 from nico_sections import NicoSectionError, extract_nico_section
 from semantic_queries import run_semantic_query
 from task_workspace import (
@@ -469,10 +469,13 @@ def get_tools(condition: str) -> list[dict]:
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
             "replace_identifier, insert_interface_item, replace_interface_item, "
             "update_interface_function_effects, update_module_imports, update_module_effects, "
-            "insert_implementation_item, replace_implementation_function. Exact-anchor edits are scoped to surface, checks, "
+            "insert_implementation_item, replace_implementation_function, "
+            "update_user_profile_timestamp_surface. Exact-anchor edits are scoped to surface, checks, "
             "implementation, or file. Structural ops locate the interface, module imports/effects, "
-            "interface function effects, or implementation function for you. The entire edit batch "
-            "is atomic: any failed check leaves the file unchanged."
+            "interface function effects, or implementation function for you. The E1-specific "
+            "update_user_profile_timestamp_surface op updates the benchmark user.types Timestamp "
+            "shape in one audited batch. The entire edit batch is atomic: any failed check or "
+            "source structure validation error leaves the file unchanged."
         ),
         "input_schema": {
             "type": "object",
@@ -502,6 +505,7 @@ def get_tools(condition: str) -> list[dict]:
                                     "update_module_effects",
                                     "insert_implementation_item",
                                     "replace_implementation_function",
+                                    "update_user_profile_timestamp_surface",
                                 ],
                             },
                             "section": {
@@ -532,7 +536,7 @@ def get_tools(condition: str) -> list[dict]:
                             },
                             "text": {
                                 "type": "string",
-                                "description": "Text to insert for insertion ops.",
+                                "description": "Text to insert for insertion ops; replacement is accepted as a compatibility alias.",
                             },
                             "expected_count": {
                                 "type": "integer",
@@ -732,9 +736,18 @@ def build_validation_summary(
     if error_calls:
         warnings.append("one or more edit_nico calls returned an error")
         audit_risk_flags.append("edit_nico_error")
+    if any("source_structure_invalid" in str(call.get("output_preview", "")) for call in error_calls):
+        warnings.append("one or more edit_nico calls failed source structure validation")
+        audit_risk_flags.append("source_structure_invalid")
     if dry_run_calls and not applied_calls and not changed_files:
         warnings.append("only dry-run edit_nico calls were recorded; no source change was applied")
         audit_risk_flags.append("dry_run_only_no_change")
+    source_validation_errors = _changed_nico_source_validation_errors(workspace, changed_files)
+    if source_validation_errors:
+        warnings.extend(source_validation_errors)
+        audit_risk_flags.append("source_validation_error")
+        if any("source_structure_invalid" in error for error in source_validation_errors):
+            audit_risk_flags.append("source_structure_invalid")
     if max_turns is not None and turns is not None and turns >= max_turns:
         warnings.append("max_turns reached before clean final answer")
         audit_risk_flags.append("max_turns_reached")
@@ -762,9 +775,46 @@ def build_validation_summary(
             if diff.get("diff_truncated")
         ],
         "audit_risk": bool(audit_risk_flags),
-        "audit_risk_flags": audit_risk_flags,
+        "audit_risk_flags": _dedupe_preserving_order(audit_risk_flags),
         "warnings": warnings,
     }
+
+
+def _changed_nico_source_validation_errors(
+    workspace: TaskWorkspace | None,
+    changed_files: list[str],
+) -> list[str]:
+    if workspace is None:
+        return []
+    errors: list[str] = []
+    for rel_path in changed_files:
+        if not isinstance(rel_path, str) or not rel_path.endswith(".nico"):
+            continue
+        path = workspace.root / rel_path
+        if not path.exists():
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            errors.append(f"source_validation_error: {rel_path} is not valid UTF-8")
+            continue
+        structure_errors = validate_nico_source_structure(source)
+        if structure_errors:
+            errors.append(
+                f"source_structure_invalid: {rel_path}: {'; '.join(structure_errors)}"
+            )
+    return errors
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _missing_c_final_sections(response: str | None) -> list[str]:

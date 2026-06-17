@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -6,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import evaluate
 import run_experiment
+from task_workspace import TaskWorkspace
 
 
 class ScoringInputTest(unittest.TestCase):
@@ -110,6 +112,46 @@ class ScoringInputTest(unittest.TestCase):
         self.assertIn("edit_nico_error", validation["audit_risk_flags"])
         self.assertIn("max_turns_reached", validation["audit_risk_flags"])
         self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
+    def test_validation_summary_marks_malformed_changed_nico_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "src/user/types.nico"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                """
+module user.types {
+  spec {
+    interface {
+      fn new_profile(id: UserId) -> UserProfile}
+    effects [reads_clock]
+  }
+  checks { }
+  implementation rust { }
+}
+""".lstrip(),
+                encoding="utf-8",
+            )
+            workspace = TaskWorkspace(
+                root=root,
+                source_root=root,
+                source_kind="test",
+                task="E1",
+                condition="C",
+                run_id="run",
+                batch_id="batch",
+                copy_policy="all_regular_files",
+            )
+            changeset = self.changeset()
+
+            validation = run_experiment.build_validation_summary(
+                workspace,
+                changeset,
+                run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            )
+
+            self.assertIn("source_validation_error", validation["audit_risk_flags"])
+            self.assertIn("source_structure_invalid", validation["audit_risk_flags"])
 
     def test_final_answer_protocol_accepts_markdown_and_bold_headings(self) -> None:
         response = """

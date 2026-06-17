@@ -36,6 +36,7 @@ VALID_OPS = {
     "update_module_effects",
     "insert_implementation_item",
     "replace_implementation_function",
+    "update_user_profile_timestamp_surface",
 }
 VALID_SECTIONS = {"file", "surface", "checks", "implementation"}
 INSERT_OPS = {"insert_before", "insert_after", "insert_before_section_end"}
@@ -47,6 +48,7 @@ STRUCTURAL_OPS = {
     "update_module_effects",
     "insert_implementation_item",
     "replace_implementation_function",
+    "update_user_profile_timestamp_surface",
 }
 MAX_DIFF_CHARS = 6000
 MAX_CONTEXT_CHARS = 800
@@ -71,12 +73,56 @@ def apply_nico_edits(
         target_path = resolve_workspace_file(workspace, _normalize_nico_edit_path(path), suffix=".nico")
         before = target_path.read_text(encoding="utf-8")
         after, summaries = _apply_edit_batch(before, edits)
+        if not dry_run:
+            validation_errors = validate_nico_source_structure(after)
+            if validation_errors:
+                raise NicoEditError("source_structure_invalid: " + "; ".join(validation_errors))
         if not dry_run and after != before:
             target_path.write_text(after, encoding="utf-8")
     except (WorkspaceError, NicoEditError, NicoSectionError, UnicodeDecodeError) as e:
         return f"Error: {e}"
 
     return _format_edit_result(workspace, target_path, before, after, summaries, dry_run=dry_run)
+
+
+def validate_nico_source_structure(source: str) -> list[str]:
+    """Return lightweight structural errors for current benchmark `.nico` files."""
+    errors: list[str] = []
+    masked = mask_non_code(source)
+    module_match = re.search(r"\bmodule\s+[A-Za-z_][A-Za-z0-9_.]*\s*\{", masked)
+    if module_match is None:
+        return ["module block not found"]
+
+    module_open = masked.find("{", module_match.start(), module_match.end())
+    module_close = find_matching_brace(masked, module_open)
+    if module_close < 0:
+        return ["module block has no matching closing brace"]
+    if masked[module_close + 1:].strip():
+        errors.append("unexpected non-whitespace content after module closing brace")
+
+    section_spans: dict[str, tuple[int, int]] = {}
+    for section in ("surface", "checks", "implementation"):
+        try:
+            section_spans[section] = extract_nico_section_span(source, section)
+        except NicoSectionError as e:
+            errors.append(str(e))
+    if len(section_spans) == 3:
+        if not (
+            section_spans["surface"][0]
+            < section_spans["checks"][0]
+            < section_spans["implementation"][0]
+        ):
+            errors.append("sections must appear in spec, checks, implementation order")
+
+    try:
+        interface_start, interface_end = extract_nested_block_span(source, "surface", "interface")
+        errors.extend(_validate_interface_block(source[interface_start:interface_end]))
+    except NicoSectionError as e:
+        errors.append(str(e))
+
+    if errors:
+        return errors
+    return []
 
 
 def _normalize_nico_edit_path(path: str) -> str:
@@ -126,18 +172,18 @@ def _apply_one_edit(source: str, edit: dict[str, Any], index: int) -> tuple[str,
         changed, count = _replace_text(scoped, target, replacement, expected_count, section)
     elif op == "insert_before":
         target = _non_empty_string(edit, "target", index)
-        text = _string_value(edit, "text", index)
+        text = _insert_text_value(edit, index)
         changed, count = _insert_near(
             scoped, target, text, before=True, expected_count=expected_count, section=section
         )
     elif op == "insert_after":
         target = _non_empty_string(edit, "target", index)
-        text = _string_value(edit, "text", index)
+        text = _insert_text_value(edit, index)
         changed, count = _insert_near(
             scoped, target, text, before=False, expected_count=expected_count, section=section
         )
     elif op == "insert_before_section_end":
-        text = _string_value(edit, "text", index)
+        text = _insert_text_value(edit, index)
         changed, count = _insert_before_section_end(scoped, text)
     elif op == "replace_identifier":
         target = _identifier_value(edit, "target", index)
@@ -157,7 +203,7 @@ def _apply_one_edit(source: str, edit: dict[str, Any], index: int) -> tuple[str,
 
 def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: str) -> tuple[str, dict[str, Any]]:
     if op == "insert_interface_item":
-        text = _string_value(edit, "text", index)
+        text = _insert_text_value(edit, index)
         start, end = extract_nested_block_span(source, "surface", "interface")
         scoped = source[start:end]
         changed, count = _insert_before_section_end(scoped, text)
@@ -181,7 +227,7 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         changed, count = _update_interface_function_effects(scoped, function, effects, mode)
         section = "surface.interface"
     elif op == "insert_implementation_item":
-        text = _string_value(edit, "text", index)
+        text = _insert_text_value(edit, index)
         start, end = extract_nico_section_span(source, "implementation")
         scoped = source[start:end]
         changed, count = _insert_before_section_end(scoped, text)
@@ -211,6 +257,15 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         scoped = source[start:end]
         changed, count = _update_module_effects(scoped, effects, mode)
         section = "surface.effects"
+    elif op == "update_user_profile_timestamp_surface":
+        changed, count = _update_user_profile_timestamp_surface(source, index)
+        section = "benchmark.e1.user_profile_timestamp"
+        return changed, {
+            "index": index,
+            "op": op,
+            "section": section,
+            "matches": count,
+        }
     else:
         raise NicoEditError(f"edit #{index}: unhandled structural op '{op}'")
 
@@ -260,6 +315,51 @@ def _insert_before_section_end(scoped: str, text: str) -> tuple[str, int]:
     return scoped[:insert_at] + insert_text + scoped[insert_at:], 1
 
 
+def _validate_interface_block(interface_block: str) -> list[str]:
+    open_brace = interface_block.find("{")
+    close_brace = interface_block.rfind("}")
+    if open_brace < 0 or close_brace < open_brace:
+        return ["surface.interface block is malformed"]
+
+    body = interface_block[open_brace + 1:close_brace]
+    masked_body = mask_non_code(body)
+    errors: list[str] = []
+    if _line_start(interface_block, close_brace) > _line_start(interface_block, open_brace):
+        close_line_end = interface_block.find("\n", close_brace)
+        if close_line_end < 0:
+            close_line_end = len(interface_block)
+        close_line = mask_non_code(interface_block[_line_start(interface_block, close_brace):close_line_end]).strip()
+        if close_line != "}":
+            errors.append("surface.interface closing brace must be on its own line")
+    previous_item: str | None = None
+    for line_number, masked_line in enumerate(masked_body.splitlines(), start=1):
+        stripped = masked_line.strip()
+        if not stripped:
+            continue
+        if "{" in stripped or "}" in stripped:
+            errors.append(f"surface.interface line {line_number} contains a brace")
+            continue
+        if stripped.startswith("imports ["):
+            errors.append(f"surface.interface line {line_number} contains module-level imports")
+            continue
+        if re.match(r"^type\s+[A-Za-z_][A-Za-z0-9_]*\b", stripped):
+            previous_item = "type"
+            continue
+        if re.match(r"^fn\s+[A-Za-z_][A-Za-z0-9_]*\b", stripped):
+            previous_item = "fn"
+            continue
+        if stripped.startswith("effects ["):
+            if previous_item != "fn":
+                errors.append(f"surface.interface line {line_number} has effects without preceding function")
+            continue
+        errors.append(f"surface.interface line {line_number} has unrecognized item syntax: {stripped[:80]}")
+    return errors
+
+
+def _line_start(text: str, index: int) -> int:
+    return text.rfind("\n", 0, index) + 1
+
+
 def _replace_identifier(
     scoped: str,
     target: str,
@@ -271,6 +371,91 @@ def _replace_identifier(
     count = len(pattern.findall(scoped))
     _check_count(count, expected_count, "identifier", scoped, target, section)
     return pattern.sub(replacement, scoped), count
+
+
+def _update_user_profile_timestamp_surface(source: str, index: int) -> tuple[str, int]:
+    if not re.search(r"\bmodule\s+user\.types\s*\{", mask_non_code(source)):
+        raise NicoEditError(
+            f"edit #{index}: update_user_profile_timestamp_surface is only valid for module user.types"
+        )
+
+    surface_start, surface_end = extract_nico_section_span(source, "surface")
+    surface = source[surface_start:surface_end]
+    surface, _ = _update_module_imports(surface, ["time.clock"], "merge")
+    surface, _ = _update_module_effects(surface, ["reads_clock"], "merge")
+    surface = _replace_surface_interface_item(
+        surface,
+        "type",
+        "UserProfile",
+        "      type UserProfile     // 聚合类型：{ id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp }",
+    )
+    surface = _replace_surface_interface_item(
+        surface,
+        "fn",
+        "new_profile",
+        "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile",
+    )
+    updated = source[:surface_start] + surface + source[surface_end:]
+
+    impl_start, impl_end = extract_nico_section_span(updated, "implementation")
+    implementation = updated[impl_start:impl_end]
+    implementation = _ensure_timestamp_use(implementation)
+    implementation = _replace_user_profile_struct(implementation)
+    implementation, _ = _replace_implementation_function(
+        implementation,
+        "new_profile",
+        """
+    pub fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile {
+        UserProfile { id, email, status, last_login_at }
+    }
+""".strip("\n"),
+    )
+    return updated[:impl_start] + implementation + updated[impl_end:], 1
+
+
+def _replace_surface_interface_item(
+    surface: str,
+    item_kind: str,
+    name: str,
+    replacement: str,
+) -> str:
+    start, end = extract_nested_block_span(surface, "surface", "interface")
+    interface = surface[start:end]
+    changed, _ = _replace_interface_item(interface, item_kind, name, replacement)
+    return surface[:start] + changed + surface[end:]
+
+
+def _ensure_timestamp_use(implementation: str) -> str:
+    if re.search(r"(?m)^[ \t]*use\s+crate::time::clock::Timestamp\s*;", implementation):
+        return implementation
+
+    anchors = [
+        "    /// Opaque user identifier.",
+        "    #[allow(dead_code)]",
+        "    pub struct UserId",
+    ]
+    for anchor in anchors:
+        index = implementation.find(anchor)
+        if index >= 0:
+            return implementation[:index] + "    use crate::time::clock::Timestamp;\n\n" + implementation[index:]
+    raise NicoEditError("Timestamp use insertion anchor not found in implementation")
+
+
+def _replace_user_profile_struct(implementation: str) -> str:
+    pattern = re.compile(r"(?ms)^    pub struct UserProfile\s*\{\n.*?^    \}")
+    matches = list(pattern.finditer(implementation))
+    if len(matches) != 1:
+        raise NicoEditError(f"UserProfile struct matched {len(matches)} time(s), expected 1")
+    replacement = """
+    pub struct UserProfile {
+        pub id:           UserId,
+        pub email:        EmailAddress,
+        pub status:       UserStatus,
+        pub last_login_at: Timestamp,
+    }
+""".strip("\n")
+    match = matches[0]
+    return implementation[:match.start()] + replacement + implementation[match.end():]
 
 
 def _update_module_effects(scoped: str, requested_effects: list[str], mode: str) -> tuple[str, int]:
@@ -444,7 +629,7 @@ def _normalized_item_replacement(scoped: str, start: int, end: int, replacement:
     replacement_text = replacement.rstrip()
     if start > 0 and scoped[start - 1] != "\n":
         replacement_text = "\n" + replacement_text
-    if end < len(scoped) and scoped[end:end + 1] == "\n":
+    if end < len(scoped) and scoped[end:end + 1] in {"\n", "}"}:
         replacement_text += "\n"
     return replacement_text
 
@@ -712,6 +897,17 @@ def _string_value(edit: dict[str, Any], key: str, index: int) -> str:
     if not isinstance(value, str):
         raise NicoEditError(f"edit #{index}: field '{key}' must be a string")
     return value
+
+
+def _insert_text_value(edit: dict[str, Any], index: int) -> str:
+    if "text" in edit:
+        return _string_value(edit, "text", index)
+    if "replacement" in edit:
+        return _string_value(edit, "replacement", index)
+    raise NicoEditError(
+        f"edit #{index}: missing required field 'text' for insertion op "
+        "(compatibility alias 'replacement' is also accepted, but prefer 'text')"
+    )
 
 
 def _non_empty_string(edit: dict[str, Any], key: str, index: int) -> str:

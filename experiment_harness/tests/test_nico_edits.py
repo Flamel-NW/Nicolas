@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import run_experiment
 import task_workspace
-from nico_edits import apply_nico_edits
+from nico_edits import apply_nico_edits, validate_nico_source_structure
 
 
 class NicoEditsTest(unittest.TestCase):
@@ -254,6 +254,98 @@ module user.types {
         self.assertNotIn("无 imports", changed)
         self.assertLess(changed.index("imports [time.clock]"), changed.index("interface {"))
         self.assertLess(changed.index("interface {"), changed.index("effects [reads_clock]"))
+
+    def test_validator_accepts_valid_fixture_and_rejects_malformed_interface(self) -> None:
+        valid = (Path(__file__).resolve().parents[1] / "materials/condition_C/e1/src/user/types.nico").read_text(
+            encoding="utf-8"
+        )
+        malformed = valid.replace(
+            "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus) -> UserProfile",
+            "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile}",
+        )
+        missing_close = valid[:-3]
+
+        self.assertEqual(validate_nico_source_structure(valid), [])
+        self.assertTrue(validate_nico_source_structure(malformed))
+        self.assertTrue(validate_nico_source_structure(missing_close))
+
+    def test_malformed_interface_edit_is_rejected_atomically(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec {
+    interface {
+      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus) -> UserProfile
+    }
+  }
+  checks { }
+  implementation rust {
+    pub fn new_profile() {}
+  }
+}
+""".lstrip()
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "replace_interface_item",
+            "item_kind": "fn",
+            "name": "new_profile",
+            "replacement": "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile}",
+        }])
+
+        self.assertIn("source_structure_invalid", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_e1_timestamp_helper_updates_user_types_in_one_batch(self) -> None:
+        workspace = self.prepare_workspace(
+            (Path(__file__).resolve().parents[1] / "materials/condition_C/e1/src/user/types.nico").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "update_user_profile_timestamp_surface",
+        }])
+
+        self.assertIn("status: applied", result)
+        self.assertIn("update_user_profile_timestamp_surface", result)
+        changed = (workspace.root / "src/user/types.nico").read_text(encoding="utf-8")
+        self.assertEqual(validate_nico_source_structure(changed), [])
+        self.assertIn("imports [time.clock]", changed)
+        self.assertIn("effects [reads_clock]", changed)
+        self.assertIn("last_login_at: Timestamp", changed)
+        self.assertIn("use crate::time::clock::Timestamp;", changed)
+        self.assertIn(
+            "fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile",
+            changed,
+        )
+
+    def test_insert_structural_ops_accept_replacement_alias(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.profile_service {
+  spec {
+    interface {
+      fn get_profile(id: UserId) -> Option
+    }
+  }
+  checks { }
+  implementation rust { }
+}
+""".lstrip(),
+            rel="src/user/profile_service.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/user/profile_service.nico", [{
+            "op": "insert_interface_item",
+            "replacement": "      fn suspend_user(id: UserId) -> ()",
+        }])
+
+        self.assertIn("status: applied", result)
+        changed = (workspace.root / "src/user/profile_service.nico").read_text(encoding="utf-8")
+        self.assertIn("fn suspend_user(id: UserId) -> ()", changed)
 
     def test_update_module_effects_does_not_match_function_effects(self) -> None:
         workspace = self.prepare_workspace(
@@ -520,7 +612,19 @@ module user.profile_service {
 
     def test_changeset_records_workspace_modification_only(self) -> None:
         workspace = self.prepare_workspace(
-            "module user.types { spec { } checks { } implementation rust { pub struct UserProfile; } }\n"
+            """
+module user.types {
+  spec {
+    interface {
+      type UserProfile
+    }
+  }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip()
         )
         baseline = self.materials / "condition_C/e1/src/user/types.nico"
 
@@ -534,7 +638,19 @@ module user.profile_service {
 
         self.assertEqual(
             baseline.read_text(encoding="utf-8"),
-            "module user.types { spec { } checks { } implementation rust { pub struct UserProfile; } }\n",
+            """
+module user.types {
+  spec {
+    interface {
+      type UserProfile
+    }
+  }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip(),
         )
         self.assertEqual(changeset["changed_files"], ["src/user/types.nico"])
 

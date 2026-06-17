@@ -246,6 +246,7 @@ class SemanticQueriesTest(unittest.TestCase):
             "type=UserProfile categories=interface_type,interface_function,implementation,checks_examples,imports_effects",
             out,
         )
+        self.assertIn("preferred_op=update_user_profile_timestamp_surface", out)
         self.assertIn(
             "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
             "effect=reads_clock",
