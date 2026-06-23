@@ -9,6 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from semantic_queries import run_semantic_query
 
 
+REMOVED_E1_OP = "update_user_profile" + "_timestamp_surface"
+REMOVED_QUERY_HINT = "preferred" + "_op"
+
+
 SCHEMA = """
 CREATE TABLE modules (id INTEGER PRIMARY KEY, name TEXT, source TEXT, schema_version TEXT);
 CREATE TABLE imports (id INTEGER PRIMARY KEY, module_name TEXT, imported_module TEXT);
@@ -246,7 +250,9 @@ class SemanticQueriesTest(unittest.TestCase):
             "type=UserProfile categories=interface_type,interface_function,implementation,checks_examples,imports_effects",
             out,
         )
-        self.assertIn("preferred_op=update_user_profile_timestamp_surface", out)
+        self.assertNotIn(REMOVED_QUERY_HINT, out)
+        self.assertNotIn(REMOVED_E1_OP, out)
+        self.assertNotIn("ops=", out)
         self.assertIn(
             "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
             "effect=reads_clock",

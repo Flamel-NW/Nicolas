@@ -609,23 +609,10 @@ def _provider_type_edit_plan_lines(
     source_map: dict[str, str],
 ) -> list[str]:
     edit_path = _source_to_nico_edit_path(source_map.get(provider, "unknown"))
-    if provider == "user.types" and type_name == "UserProfile":
-        return [
-            f"- {provider} edit_path={edit_path} action=update_type_surface "
-            f"type={type_name} categories=interface_type,interface_function,"
-            "implementation,checks_examples,imports_effects "
-            "preferred_op=update_user_profile_timestamp_surface "
-            "ops=update_user_profile_timestamp_surface,replace_interface_item,"
-            "update_interface_function_effects,replace_implementation_function,"
-            "update_module_imports,update_module_effects required_edit=true "
-            "reason=provider_module_type_shape_changed"
-        ]
     return [
         f"- {provider} edit_path={edit_path} action=update_type_surface "
         f"type={type_name} categories=interface_type,interface_function,"
         "implementation,checks_examples,imports_effects "
-        "ops=replace_interface_item,update_interface_function_effects,"
-        "replace_implementation_function,update_module_imports,update_module_effects "
         "required_edit=true reason=provider_module_type_shape_changed"
     ]
 

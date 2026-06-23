@@ -469,12 +469,11 @@ def get_tools(condition: str) -> list[dict]:
             "ops: replace_text, insert_before, insert_after, insert_before_section_end, "
             "replace_identifier, insert_interface_item, replace_interface_item, "
             "update_interface_function_effects, update_module_imports, update_module_effects, "
-            "insert_implementation_item, replace_implementation_function, "
-            "update_user_profile_timestamp_surface. Exact-anchor edits are scoped to surface, checks, "
+            "insert_implementation_item, replace_implementation_function. "
+            "Exact-anchor edits are scoped to surface, checks, "
             "implementation, or file. Structural ops locate the interface, module imports/effects, "
-            "interface function effects, or implementation function for you. The E1-specific "
-            "update_user_profile_timestamp_surface op updates the benchmark user.types Timestamp "
-            "shape in one audited batch. The entire edit batch is atomic: any failed check or "
+            "interface function effects, or implementation function for you. The entire edit "
+            "batch is atomic: any failed check or "
             "source structure validation error leaves the file unchanged."
         ),
         "input_schema": {
@@ -505,7 +504,6 @@ def get_tools(condition: str) -> list[dict]:
                                     "update_module_effects",
                                     "insert_implementation_item",
                                     "replace_implementation_function",
-                                    "update_user_profile_timestamp_surface",
                                 ],
                             },
                             "section": {

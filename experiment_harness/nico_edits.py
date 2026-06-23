@@ -36,7 +36,6 @@ VALID_OPS = {
     "update_module_effects",
     "insert_implementation_item",
     "replace_implementation_function",
-    "update_user_profile_timestamp_surface",
 }
 VALID_SECTIONS = {"file", "surface", "checks", "implementation"}
 INSERT_OPS = {"insert_before", "insert_after", "insert_before_section_end"}
@@ -48,7 +47,6 @@ STRUCTURAL_OPS = {
     "update_module_effects",
     "insert_implementation_item",
     "replace_implementation_function",
-    "update_user_profile_timestamp_surface",
 }
 MAX_DIFF_CHARS = 6000
 MAX_CONTEXT_CHARS = 800
@@ -257,15 +255,6 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         scoped = source[start:end]
         changed, count = _update_module_effects(scoped, effects, mode)
         section = "surface.effects"
-    elif op == "update_user_profile_timestamp_surface":
-        changed, count = _update_user_profile_timestamp_surface(source, index)
-        section = "benchmark.e1.user_profile_timestamp"
-        return changed, {
-            "index": index,
-            "op": op,
-            "section": section,
-            "matches": count,
-        }
     else:
         raise NicoEditError(f"edit #{index}: unhandled structural op '{op}'")
 
@@ -371,91 +360,6 @@ def _replace_identifier(
     count = len(pattern.findall(scoped))
     _check_count(count, expected_count, "identifier", scoped, target, section)
     return pattern.sub(replacement, scoped), count
-
-
-def _update_user_profile_timestamp_surface(source: str, index: int) -> tuple[str, int]:
-    if not re.search(r"\bmodule\s+user\.types\s*\{", mask_non_code(source)):
-        raise NicoEditError(
-            f"edit #{index}: update_user_profile_timestamp_surface is only valid for module user.types"
-        )
-
-    surface_start, surface_end = extract_nico_section_span(source, "surface")
-    surface = source[surface_start:surface_end]
-    surface, _ = _update_module_imports(surface, ["time.clock"], "merge")
-    surface, _ = _update_module_effects(surface, ["reads_clock"], "merge")
-    surface = _replace_surface_interface_item(
-        surface,
-        "type",
-        "UserProfile",
-        "      type UserProfile     // 聚合类型：{ id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp }",
-    )
-    surface = _replace_surface_interface_item(
-        surface,
-        "fn",
-        "new_profile",
-        "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile",
-    )
-    updated = source[:surface_start] + surface + source[surface_end:]
-
-    impl_start, impl_end = extract_nico_section_span(updated, "implementation")
-    implementation = updated[impl_start:impl_end]
-    implementation = _ensure_timestamp_use(implementation)
-    implementation = _replace_user_profile_struct(implementation)
-    implementation, _ = _replace_implementation_function(
-        implementation,
-        "new_profile",
-        """
-    pub fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile {
-        UserProfile { id, email, status, last_login_at }
-    }
-""".strip("\n"),
-    )
-    return updated[:impl_start] + implementation + updated[impl_end:], 1
-
-
-def _replace_surface_interface_item(
-    surface: str,
-    item_kind: str,
-    name: str,
-    replacement: str,
-) -> str:
-    start, end = extract_nested_block_span(surface, "surface", "interface")
-    interface = surface[start:end]
-    changed, _ = _replace_interface_item(interface, item_kind, name, replacement)
-    return surface[:start] + changed + surface[end:]
-
-
-def _ensure_timestamp_use(implementation: str) -> str:
-    if re.search(r"(?m)^[ \t]*use\s+crate::time::clock::Timestamp\s*;", implementation):
-        return implementation
-
-    anchors = [
-        "    /// Opaque user identifier.",
-        "    #[allow(dead_code)]",
-        "    pub struct UserId",
-    ]
-    for anchor in anchors:
-        index = implementation.find(anchor)
-        if index >= 0:
-            return implementation[:index] + "    use crate::time::clock::Timestamp;\n\n" + implementation[index:]
-    raise NicoEditError("Timestamp use insertion anchor not found in implementation")
-
-
-def _replace_user_profile_struct(implementation: str) -> str:
-    pattern = re.compile(r"(?ms)^    pub struct UserProfile\s*\{\n.*?^    \}")
-    matches = list(pattern.finditer(implementation))
-    if len(matches) != 1:
-        raise NicoEditError(f"UserProfile struct matched {len(matches)} time(s), expected 1")
-    replacement = """
-    pub struct UserProfile {
-        pub id:           UserId,
-        pub email:        EmailAddress,
-        pub status:       UserStatus,
-        pub last_login_at: Timestamp,
-    }
-""".strip("\n")
-    match = matches[0]
-    return implementation[:match.start()] + replacement + implementation[match.end():]
 
 
 def _update_module_effects(scoped: str, requested_effects: list[str], mode: str) -> tuple[str, int]:

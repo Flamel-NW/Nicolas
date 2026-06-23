@@ -7,6 +7,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import run_experiment
 
 
+REMOVED_E1_OP = "update_user_profile" + "_timestamp_surface"
+REMOVED_QUERY_HINT = "preferred" + "_op"
+
+
 class PromptProtocolTest(unittest.TestCase):
     def test_condition_c_task_prompt_appends_protocol_override(self) -> None:
         prompt = run_experiment.load_task_prompt_v3("E1", "C")
@@ -18,9 +22,7 @@ class PromptProtocolTest(unittest.TestCase):
         self.assertIn("`update_interface_function_effects`", prompt)
         self.assertIn("`replace_implementation_function`", prompt)
         self.assertIn("`update_module_imports`", prompt)
-        self.assertIn("`update_user_profile_timestamp_surface`", prompt)
         self.assertIn("module-level `imports [...]`", prompt)
-        self.assertIn("preferred_op=update_user_profile_timestamp_surface", prompt)
         self.assertIn("source_edit_plan", prompt)
         self.assertIn("DB source", prompt)
         self.assertIn("source_effect_update_plan", prompt)
@@ -36,6 +38,13 @@ class PromptProtocolTest(unittest.TestCase):
         self.assertIn("dry-run previews", prompt)
         self.assertIn("Do not present complete updated module contents", prompt)
         self.assertIn("Final answer format:", prompt)
+        self.assertNotIn(REMOVED_E1_OP, prompt)
+        self.assertNotIn(REMOVED_QUERY_HINT, prompt)
+
+        tools = run_experiment.get_tools("C")
+        edit_tool = next(tool for tool in tools if tool["name"] == "edit_nico")
+        op_enum = edit_tool["input_schema"]["properties"]["edits"]["items"]["properties"]["op"]["enum"]
+        self.assertNotIn(REMOVED_E1_OP, op_enum)
 
     def test_condition_a_and_d_task_prompts_do_not_append_c_protocol(self) -> None:
         for condition in ("A", "D"):

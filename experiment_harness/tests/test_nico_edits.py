@@ -298,25 +298,83 @@ module user.types {
         self.assertIn("source_structure_invalid", result)
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
-    def test_e1_timestamp_helper_updates_user_types_in_one_batch(self) -> None:
+    def test_e1_timestamp_change_can_use_generic_structural_ops(self) -> None:
         workspace = self.prepare_workspace(
             (Path(__file__).resolve().parents[1] / "materials/condition_C/e1/src/user/types.nico").read_text(
                 encoding="utf-8"
             )
         )
 
-        result = apply_nico_edits(workspace, "src/user/types.nico", [{
-            "op": "update_user_profile_timestamp_surface",
-        }])
+        result = apply_nico_edits(workspace, "src/user/types.nico", [
+            {
+                "op": "update_module_imports",
+                "imports": ["time.clock"],
+                "mode": "merge",
+            },
+            {
+                "op": "update_module_effects",
+                "effects": ["reads_clock"],
+                "mode": "merge",
+            },
+            {
+                "op": "replace_interface_item",
+                "item_kind": "type",
+                "name": "UserProfile",
+                "replacement": "      type UserProfile     // 聚合类型：{ id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp }",
+            },
+            {
+                "op": "replace_interface_item",
+                "item_kind": "fn",
+                "name": "new_profile",
+                "replacement": "      fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile",
+            },
+            {
+                "op": "replace_text",
+                "section": "checks",
+                "target": "        let profile = user.types.new_profile(id, email.unwrap(), UserStatus::Active);",
+                "replacement": "        let last_login_at = time.clock.now();\n        let profile = user.types.new_profile(id, email.unwrap(), UserStatus::Active, last_login_at);",
+            },
+            {
+                "op": "insert_before",
+                "section": "implementation",
+                "target": "    /// Opaque user identifier.",
+                "text": "    use crate::time::clock::Timestamp;\n\n",
+            },
+            {
+                "op": "replace_text",
+                "section": "implementation",
+                "target": """    pub struct UserProfile {
+        pub id:     UserId,
+        pub email:  EmailAddress,
+        pub status: UserStatus,
+    }""",
+                "replacement": """    pub struct UserProfile {
+        pub id:            UserId,
+        pub email:         EmailAddress,
+        pub status:        UserStatus,
+        pub last_login_at: Timestamp,
+    }""",
+            },
+            {
+                "op": "replace_implementation_function",
+                "function": "new_profile",
+                "replacement": """
+    pub fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile {
+        UserProfile { id, email, status, last_login_at }
+    }
+""".strip("\n"),
+            },
+        ])
 
         self.assertIn("status: applied", result)
-        self.assertIn("update_user_profile_timestamp_surface", result)
+        self.assertIn("edits: 8", result)
         changed = (workspace.root / "src/user/types.nico").read_text(encoding="utf-8")
         self.assertEqual(validate_nico_source_structure(changed), [])
         self.assertIn("imports [time.clock]", changed)
         self.assertIn("effects [reads_clock]", changed)
         self.assertIn("last_login_at: Timestamp", changed)
         self.assertIn("use crate::time::clock::Timestamp;", changed)
+        self.assertIn("let last_login_at = time.clock.now();", changed)
         self.assertIn(
             "fn new_profile(id: UserId, email: EmailAddress, status: UserStatus, last_login_at: Timestamp) -> UserProfile",
             changed,

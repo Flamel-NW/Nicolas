@@ -15,8 +15,7 @@ Use the condition C tools to apply the requested changes to the task workspace:
    workspace file. Prefer structural ops (`insert_interface_item`,
    `replace_interface_item`, `update_interface_function_effects`,
    `update_module_imports`, `update_module_effects`,
-   `insert_implementation_item`, `replace_implementation_function`,
-   `update_user_profile_timestamp_surface`) for
+   `insert_implementation_item`, `replace_implementation_function`) for
    interface items, interface function effects, module-level imports,
    module-level effects, and implementation functions. Use exact-anchor ops
    only for local replacements.
@@ -34,10 +33,6 @@ Use the condition C tools to apply the requested changes to the task workspace:
    row says `action=add_function_effect`, use `update_interface_function_effects`
    for that function. Do not treat DB `propagated_effects` as a substitute for
    updating the `.nico` module-level `effects [...]` source.
-   If the `source_edit_plan` provider row says
-   `preferred_op=update_user_profile_timestamp_surface`, use that single
-   `edit_nico` op for `user.types`; do not reconstruct the same change with
-   broad `replace_text` edits.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass.
