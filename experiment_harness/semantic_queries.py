@@ -387,14 +387,23 @@ def _affected_modules(
     type_provider_line = "none"
     if type_name:
         rows = conn.execute(
-            "SELECT module_name, name FROM types WHERE name=? ORDER BY module_name",
-            (type_name,),
+            "SELECT module_name, name FROM types WHERE module_name=? AND name=?",
+            (module, type_name),
         ).fetchall()
         if not rows:
-            return f"Error: type '{type_name}' not found"
-        if len(rows) > 1:
-            providers = [row["module_name"] for row in rows]
-            return f"Error: type '{type_name}' is ambiguous. Provide module. Candidates: {providers}"
+            candidates = [
+                row["module_name"]
+                for row in conn.execute(
+                    "SELECT module_name FROM types WHERE name=? ORDER BY module_name",
+                    (type_name,),
+                ).fetchall()
+            ]
+            if candidates:
+                return (
+                    f"Error: type '{type_name}' not found in module '{module}'. "
+                    f"Candidates in other modules: {candidates}"
+                )
+            return f"Error: type '{type_name}' not found in module '{module}'"
         provider = rows[0]["module_name"]
         type_provider_line = f"{provider}.{type_name}"
 
@@ -472,6 +481,7 @@ def _affected_modules(
         conn,
         module=module,
         provider=provider,
+        dependent_rows=dependent_rows,
         candidate_modules=candidate_modules,
         type_name=type_name,
         function=function,
@@ -578,6 +588,7 @@ def _source_edit_plan_lines(
     conn: sqlite3.Connection,
     module: str,
     provider: str,
+    dependent_rows: list[dict[str, Any]],
     candidate_modules: list[str],
     type_name: str | None,
     function: str | None,
@@ -587,7 +598,14 @@ def _source_edit_plan_lines(
 ) -> list[str]:
     lines: list[str] = []
     if type_name:
-        lines.extend(_provider_type_edit_plan_lines(provider, type_name, source_map))
+        lines.extend(_provider_type_edit_plan_lines(
+            conn,
+            provider,
+            type_name,
+            source_map,
+            dependent_rows,
+            candidate_reasons,
+        ))
     if function:
         lines.extend(_function_effect_edit_plan_lines(conn, module, function, effect, source_map))
     if effect:
@@ -604,17 +622,32 @@ def _source_edit_plan_lines(
 
 
 def _provider_type_edit_plan_lines(
+    conn: sqlite3.Connection,
     provider: str,
     type_name: str,
     source_map: dict[str, str],
+    dependent_rows: list[dict[str, Any]],
+    candidate_reasons: dict[str, str],
 ) -> list[str]:
     edit_path = _source_to_nico_edit_path(source_map.get(provider, "unknown"))
-    return [
+    lines = [
         f"- {provider} edit_path={edit_path} action=update_type_surface "
         f"type={type_name} categories=interface_type,interface_function,"
         "implementation,checks_examples,imports_effects "
         "required_edit=true reason=provider_module_type_shape_changed"
     ]
+    for row in dependent_rows:
+        module = row["module"]
+        dep_path = _source_to_nico_edit_path(source_map.get(module, "unknown"))
+        examples = _module_examples(conn, module)
+        example_text = f" examples={_compact_list(examples)}" if examples else ""
+        reason = candidate_reasons.get(module, "type_dependent")
+        lines.append(
+            f"- {module} edit_path={dep_path} action=review_type_dependency "
+            f"type={type_name} categories=imports,checks_examples,call_sites "
+            f"required_edit=true{example_text} reason={reason}"
+        )
+    return lines
 
 
 def _function_effect_edit_plan_lines(
@@ -640,12 +673,38 @@ def _function_effect_edit_plan_lines(
     required = not has_effect
     edit_path = _source_to_nico_edit_path(source_map.get(module, "unknown"))
     no_op = " no_op_edit=forbidden" if has_effect else ""
-    return [
+    lines = [
         f"- {module}.{function} edit_path={edit_path} action={action} "
         f"effect={effect} current_function_effects={_compact_list(current_effects)} "
-        f"op=update_interface_function_effects required_edit={str(required).lower()}"
+        f"required_edit={str(required).lower()}"
         f"{no_op} reason=function_effect_update"
     ]
+    for caller in _reverse_call_paths(conn, module, function, transitive=True):
+        caller_module, caller_fn = _split_fn_label(caller["caller"])
+        caller_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND function_name=? ORDER BY effect",
+            (caller_module, caller_fn),
+            None,
+        )
+        caller_module_effects = _filtered_effects(
+            conn,
+            "SELECT effect FROM effects WHERE module_name=? AND scope='module' ORDER BY effect",
+            (caller_module,),
+            None,
+        )
+        caller_has_effect = effect in caller_effects or effect in caller_module_effects
+        caller_required = not caller_has_effect
+        caller_no_op = " no_op_edit=forbidden" if caller_has_effect else ""
+        lines.append(
+            f"- {caller['caller']} edit_path={_source_to_nico_edit_path(source_map.get(caller_module, 'unknown'))} "
+            f"action=review_caller_effect_boundary effect={effect} "
+            f"current_function_effects={_compact_list(caller_effects)} "
+            f"current_module_effects={_compact_list(caller_module_effects)} "
+            f"required_edit={str(caller_required).lower()}{caller_no_op} "
+            f"reason=caller_via_call_path:{' -> '.join(caller['path'])}"
+        )
+    return lines
 
 
 def _module_effect_edit_plan_lines(
@@ -672,10 +731,25 @@ def _module_effect_edit_plan_lines(
         lines.append(
             f"- {module} edit_path={edit_path} action={action} effect={effect} "
             f"current_module_effects={_compact_list(current_effects)} "
-            f"op=update_module_effects required_edit={str(required).lower()}"
+            f"required_edit={str(required).lower()}"
             f"{no_op} reason={reason}"
         )
     return lines or ["- none"]
+
+
+def _module_examples(conn: sqlite3.Connection, module: str) -> list[str]:
+    return [
+        row["path"] or row["example_id"]
+        for row in conn.execute(
+            "SELECT example_id, path FROM examples WHERE module_name=? ORDER BY example_id",
+            (module,),
+        ).fetchall()
+    ]
+
+
+def _split_fn_label(label: str) -> tuple[str, str]:
+    module, _, function = label.rpartition(".")
+    return module, function
 
 
 def _source_to_nico_edit_path(source: str) -> str:

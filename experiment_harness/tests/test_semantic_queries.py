@@ -250,9 +250,20 @@ class SemanticQueriesTest(unittest.TestCase):
             "type=UserProfile categories=interface_type,interface_function,implementation,checks_examples,imports_effects",
             out,
         )
+        self.assertIn(
+            "user.profile_service edit_path=src/user/profile_service.nico action=review_type_dependency "
+            "type=UserProfile categories=imports,checks_examples,call_sites required_edit=true",
+            out,
+        )
+        self.assertIn(
+            "session.service edit_path=src/session/service.nico action=review_type_dependency "
+            "type=UserProfile categories=imports,checks_examples,call_sites required_edit=true",
+            out,
+        )
         self.assertNotIn(REMOVED_QUERY_HINT, out)
         self.assertNotIn(REMOVED_E1_OP, out)
         self.assertNotIn("ops=", out)
+        self.assertNotIn("op=", out)
         self.assertIn(
             "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
             "effect=reads_clock",
@@ -299,6 +310,7 @@ class SemanticQueriesTest(unittest.TestCase):
             out,
         )
         self.assertIn("no_op_edit=forbidden", out)
+        self.assertNotIn("op=", out)
 
     def test_affected_modules_function_effect_plan_for_cache_metrics(self) -> None:
         out = run_semantic_query(
@@ -316,9 +328,28 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn(
             "cache.kv.get edit_path=src/cache/kv.nico action=add_function_effect "
             "effect=metrics.write current_function_effects=reads_clock "
-            "op=update_interface_function_effects required_edit=true",
+            "required_edit=true",
             out,
         )
+        self.assertIn(
+            "user.profile_service.get_profile edit_path=src/user/profile_service.nico "
+            "action=review_caller_effect_boundary effect=metrics.write",
+            out,
+        )
+        self.assertNotIn("op=", out)
+
+    def test_affected_modules_type_name_is_disambiguated_by_module(self) -> None:
+        out = run_semantic_query(
+            {
+                "query": "affected_modules",
+                "module": "cache.kv",
+                "type_name": "UserProfile",
+            },
+            self.db_path,
+        )
+
+        self.assertIn("Error: type 'UserProfile' not found in module 'cache.kv'", out)
+        self.assertIn("user.types", out)
 
 
 if __name__ == "__main__":

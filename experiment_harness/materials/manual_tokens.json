@@ -1,5 +1,6 @@
 {
   "manual_file": "nicolas_llm_manual_v3.md",
   "manual_tokens_per_turn": 1368,
+  "estimated": false,
   "note": "Tokens contributed by the Nicolas LLM Manual to each API call's input_tokens when used as the system prompt. Subtract manual_tokens_per_turn * turns from total_input_tokens to get task_input_tokens (task cost excluding fixed infrastructure overhead)."
 }

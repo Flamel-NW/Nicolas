@@ -10,6 +10,43 @@ import run_experiment
 from task_workspace import TaskWorkspace
 
 
+class FakeUsage:
+    input_tokens = 10
+    output_tokens = 1
+
+
+class FakeTextBlock:
+    type = "text"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class FakeResponse:
+    usage = FakeUsage()
+
+    def __init__(self, stop_reason: str, content: list | None = None) -> None:
+        self.stop_reason = stop_reason
+        self.content = content or []
+
+
+class FakeMessages:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = list(responses)
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self.responses:
+            return self.responses.pop(0)
+        return FakeResponse("tool_use")
+
+
+class FakeClient:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.messages = FakeMessages(responses)
+
+
 class ScoringInputTest(unittest.TestCase):
     def edit_tool_call(self, *, status: str = "applied") -> dict:
         output = (
@@ -106,12 +143,57 @@ class ScoringInputTest(unittest.TestCase):
             response="Summary:\n- changed user.types",
             turns=25,
             max_turns=25,
+            termination_status="max_turns_exhausted",
         )
 
         self.assertIs(validation["audit_risk"], True)
         self.assertIn("edit_nico_error", validation["audit_risk_flags"])
         self.assertIn("max_turns_reached", validation["audit_risk_flags"])
         self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
+    def test_validation_summary_does_not_mark_clean_end_turn_at_max_turn(self) -> None:
+        response = """
+Summary:
+- changed user.types
+
+Evidence:
+- edit_nico
+
+Boundary/effects check:
+- no boundary violation
+
+Validation status:
+- edits applied through edit_nico
+""".strip()
+
+        validation = run_experiment.build_validation_summary(
+            None,
+            self.changeset(),
+            run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            response=response,
+            turns=25,
+            max_turns=25,
+            stop_reason="end_turn",
+            termination_status="clean_end_turn",
+        )
+
+        self.assertNotIn("max_turns_reached", validation["audit_risk_flags"])
+        self.assertNotIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+
+    def test_validation_summary_flags_blank_response_and_unexpected_stop(self) -> None:
+        validation = run_experiment.build_validation_summary(
+            None,
+            self.changeset(),
+            run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            response="   ",
+            turns=3,
+            max_turns=25,
+            stop_reason="stop_sequence",
+            termination_status="unexpected_stop_reason",
+        )
+
+        self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
+        self.assertIn("unexpected_stop_reason", validation["audit_risk_flags"])
 
     def test_validation_summary_marks_malformed_changed_nico_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,8 +290,77 @@ __Validation status:__
         scoring_input = evaluate.build_scoring_input_from_record(record)
 
         self.assertEqual(scoring_input["schema"], "evaluator-fallback-scoring-input-v1")
+        self.assertIs(scoring_input["evidence_integrity"]["self_contained"], False)
+        self.assertIn("missing_scoring_input", scoring_input["evidence_integrity"]["validation_errors"])
         self.assertEqual(scoring_input["changed_files"], ["src/user/types.nico"])
         self.assertEqual(scoring_input["write_tool_calls"][0]["result_status"], "applied")
+
+    def test_evaluator_rejects_stale_scoring_input_and_marks_fallback(self) -> None:
+        record = {
+            "response": "Summary:\n- changed user.types",
+            "workspace": {
+                "path": "workspaces/batch/run",
+                "changeset": self.changeset(),
+            },
+            "workspace_changeset": self.changeset(),
+            "write_tool_calls": run_experiment.summarize_write_tool_calls([self.edit_tool_call()]),
+            "validation_summary": {"audit_risk": False, "audit_risk_flags": []},
+            "scoring_input": {
+                "schema": "t3-scoring-input-v1",
+                "final_answer": "stale",
+                "workspace_path": "workspaces/batch/run",
+                "changed_files": [],
+                "changeset_summary": None,
+                "compact_diffs": [],
+                "write_tool_calls": [],
+                "validation_summary": None,
+            },
+        }
+
+        scoring_input = evaluate.build_scoring_input_from_record(record)
+
+        self.assertEqual(scoring_input["schema"], "evaluator-fallback-scoring-input-v1")
+        self.assertIs(scoring_input["evidence_integrity"]["self_contained"], False)
+        self.assertIn("changed_files_mismatch", scoring_input["evidence_integrity"]["validation_errors"])
+        self.assertEqual(scoring_input["changed_files"], ["src/user/types.nico"])
+
+    def test_run_tool_use_clean_end_turn_at_max_turn_is_not_exhausted(self) -> None:
+        responses = [FakeResponse("tool_use") for _ in range(run_experiment.MAX_TURNS - 1)]
+        responses.append(FakeResponse("end_turn", [FakeTextBlock("Summary:\n- done")]))
+        result = run_experiment.run_tool_use(
+            FakeClient(responses),
+            system="system",
+            task_prompt="task",
+            task="E1",
+            condition="C",
+            run_num=1,
+            dry_run=False,
+            manual_tokens_per_turn=0,
+            model="fake",
+            provider="anthropic",
+        )
+
+        self.assertEqual(result["turns"], run_experiment.MAX_TURNS)
+        self.assertEqual(result["stop_reason"], "end_turn")
+        self.assertEqual(result["termination_status"], "clean_end_turn")
+
+    def test_run_tool_use_marks_max_turns_exhausted(self) -> None:
+        result = run_experiment.run_tool_use(
+            FakeClient([FakeResponse("tool_use") for _ in range(run_experiment.MAX_TURNS)]),
+            system="system",
+            task_prompt="task",
+            task="E1",
+            condition="C",
+            run_num=1,
+            dry_run=False,
+            manual_tokens_per_turn=0,
+            model="fake",
+            provider="anthropic",
+        )
+
+        self.assertEqual(result["turns"], run_experiment.MAX_TURNS)
+        self.assertEqual(result["stop_reason"], "tool_use")
+        self.assertEqual(result["termination_status"], "max_turns_exhausted")
 
 
 if __name__ == "__main__":

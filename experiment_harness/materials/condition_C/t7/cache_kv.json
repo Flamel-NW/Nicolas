@@ -20,6 +20,22 @@
     ],
     "functions": [
       {
+        "name": "new_key",
+        "signature": "pub fn new_key(s: String) -> CacheKey",
+        "visibility": "pub",
+        "effects": [],
+        "return_type": "CacheKey",
+        "calls": []
+      },
+      {
+        "name": "new_ttl",
+        "signature": "pub fn new_ttl(secs: u64) -> CacheTtl",
+        "visibility": "pub",
+        "effects": [],
+        "return_type": "CacheTtl",
+        "calls": []
+      },
+      {
         "name": "get",
         "signature": "pub fn get(key: CacheKey) -> Option",
         "visibility": "pub",

@@ -11,6 +11,12 @@ module cache.kv {
       type CacheTtl    // 不透明 TTL 时长；内部表示：u64（秒）；独立类型，不复用 time.clock.Duration
 
       // 公开 functions
+      fn new_key(s: String) -> CacheKey
+        // 从原始字符串构造公开 cache key
+
+      fn new_ttl(secs: u64) -> CacheTtl
+        // 从秒数构造公开 TTL
+
       fn get(key: CacheKey) -> Option
         effects [reads_clock]
         // 读取 time.clock.now() 检查条目是否过期；过期则返回 None
@@ -33,8 +39,8 @@ module cache.kv {
       example set_and_get {
         // 验证：写入一个带 TTL 的条目后，在未过期前能取回值
         // 对应 examples/cache_kv_set_and_get.rs（cargo test --example cache_kv_set_and_get）
-        let key = cache.kv.CacheKey("user:42");
-        let ttl = cache.kv.CacheTtl(300);
+        let key = cache.kv.new_key("user:42");
+        let ttl = cache.kv.new_ttl(300);
         cache.kv.set(key, "profile_data", ttl);
         let result = cache.kv.get(key);
         assert result.is_some();
@@ -43,8 +49,8 @@ module cache.kv {
       example expired_entry_returns_none {
         // 验证：TTL 为 0 秒的条目（立即过期）get 时返回 None
         // 对应 examples/cache_kv_expired_entry_returns_none.rs
-        let key = cache.kv.CacheKey("user:99");
-        let ttl = cache.kv.CacheTtl(0);
+        let key = cache.kv.new_key("user:99");
+        let ttl = cache.kv.new_ttl(0);
         cache.kv.set(key, "stale_data", ttl);
         let result = cache.kv.get(key);
         assert result.is_none();
@@ -80,13 +86,23 @@ module cache.kv {
     /// Opaque cache key. The inner `String` is not exposed to prevent callers
     /// from constructing keys without going through the designated constructor.
     #[allow(dead_code)]
-    pub struct CacheKey(String);
+    pub struct CacheKey(pub String);
 
     /// Opaque TTL duration in seconds. Kept distinct from `time.clock::Duration`
     /// to avoid coupling the cache interface to the clock module's internal
     /// representation in v0.
     #[allow(dead_code)]
-    pub struct CacheTtl(u64);
+    pub struct CacheTtl(pub u64);
+
+    /// Construct a cache key from a raw string.
+    pub fn new_key(s: String) -> CacheKey {
+        CacheKey(s)
+    }
+
+    /// Construct a TTL value from a duration in seconds.
+    pub fn new_ttl(secs: u64) -> CacheTtl {
+        CacheTtl(secs)
+    }
 
     /// Look up a cache entry by key.
     ///

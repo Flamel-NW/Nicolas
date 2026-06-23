@@ -703,6 +703,8 @@ def build_validation_summary(
     response: str | None = None,
     turns: int | None = None,
     max_turns: int | None = None,
+    stop_reason: str | None = None,
+    termination_status: str | None = None,
 ) -> dict | None:
     """Build mechanical validation metadata for scoring/audit.
 
@@ -746,9 +748,12 @@ def build_validation_summary(
         audit_risk_flags.append("source_validation_error")
         if any("source_structure_invalid" in error for error in source_validation_errors):
             audit_risk_flags.append("source_structure_invalid")
-    if max_turns is not None and turns is not None and turns >= max_turns:
+    if termination_status == "max_turns_exhausted":
         warnings.append("max_turns reached before clean final answer")
         audit_risk_flags.append("max_turns_reached")
+    if termination_status == "unexpected_stop_reason":
+        warnings.append(f"tool-use loop stopped with unexpected stop_reason={stop_reason}")
+        audit_risk_flags.append("unexpected_stop_reason")
     missing_sections = _missing_c_final_sections(response)
     if missing_sections:
         warnings.append(f"final answer missing protocol sections: {', '.join(missing_sections)}")
@@ -775,6 +780,10 @@ def build_validation_summary(
         "audit_risk": bool(audit_risk_flags),
         "audit_risk_flags": _dedupe_preserving_order(audit_risk_flags),
         "warnings": warnings,
+        "turns": turns,
+        "max_turns": max_turns,
+        "stop_reason": stop_reason,
+        "termination_status": termination_status,
     }
 
 
@@ -816,14 +825,16 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
 
 
 def _missing_c_final_sections(response: str | None) -> list[str]:
-    if not response or not response.strip():
-        return []
     required = {
         "Summary": "summary",
         "Evidence": "evidence",
         "Boundary/effects check": "boundary/effects check",
         "Validation status": "validation status",
     }
+    if response is None:
+        return []
+    if not response.strip():
+        return list(required)
     found = _c_final_section_headings(response)
     return [label for label, normalized in required.items() if normalized not in found]
 
@@ -886,6 +897,11 @@ def build_scoring_input(
         "compact_diffs": changeset.get("diffs", []) if changeset else [],
         "write_tool_calls": write_tool_calls,
         "validation_summary": validation_summary,
+        "evidence_integrity": {
+            "self_contained": True,
+            "source": "result.scoring_input",
+            "validation_errors": [],
+        },
     }
 
 
@@ -1211,6 +1227,8 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
     per_turn_returned_models: list[str | None] = []
     turns = 0
     final_text = ""
+    final_stop_reason = None
+    termination_status = "max_turns_exhausted"
 
     if dry_run:
         print(f"\n{'='*60}")
@@ -1235,6 +1253,7 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
             **provider_request_options(provider),
         )
         turns += 1
+        final_stop_reason = response.stop_reason
         turn_input = response.usage.input_tokens
         total_input_tokens += turn_input
         total_output_tokens += response.usage.output_tokens
@@ -1243,15 +1262,21 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
         print(f"T{turns}(in={turn_input},out={response.usage.output_tokens})",
               end=" ", flush=True)
 
-        # Accumulate any text blocks from this response
+        # Keep the text for the current response. The final answer must come
+        # from the terminating assistant turn, not from earlier tool-use turns.
+        turn_text = ""
         for block in response.content:
             if hasattr(block, "text"):
-                final_text += block.text
+                turn_text += block.text
 
         if response.stop_reason == "end_turn":
+            final_text = turn_text
+            termination_status = "clean_end_turn"
             break
 
         if response.stop_reason == "tool_use":
+            if turn_text:
+                final_text = turn_text
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
@@ -1273,9 +1298,11 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
             messages.append({"role": "user", "content": tool_results})
         else:
             print(f"[unexpected stop_reason={response.stop_reason}]", end=" ")
+            final_text = turn_text
+            termination_status = "unexpected_stop_reason"
             break
 
-    if turns >= MAX_TURNS:
+    if termination_status == "max_turns_exhausted":
         print(f"\n  WARNING: max_turns ({MAX_TURNS}) reached — loop may be stuck.")
 
     # --- Token accounting (three layers) ---
@@ -1332,6 +1359,8 @@ def run_tool_use(client: anthropic.Anthropic, system: str, task_prompt: str,
         "tool_calls": tool_call_log,
         "tool_call_count": len(tool_call_log),
         "turns": turns,
+        "stop_reason": final_stop_reason,
+        "termination_status": termination_status,
         "per_turn_input_tokens": per_turn_input_tokens,
         "per_turn_returned_models": per_turn_returned_models,
         "returned_model": next((m for m in reversed(per_turn_returned_models) if m), None),
@@ -1544,6 +1573,8 @@ def main():
                 response=result["response"],
                 turns=result.get("turns"),
                 max_turns=MAX_TURNS,
+                stop_reason=result.get("stop_reason"),
+                termination_status=result.get("termination_status"),
             )
             scoring_input = build_scoring_input(
                 result["response"], workspace_record, changeset, write_tool_calls, validation_summary
@@ -1565,6 +1596,8 @@ def main():
                 "temperature": TEMPERATURE,
                 "max_tokens": MAX_TOKENS,
                 "max_turns": MAX_TURNS,
+                "stop_reason": result.get("stop_reason"),
+                "termination_status": result.get("termination_status"),
                 "mode": "tool_use",
                 "db_task": result_db_task(condition, task),
                 "db_scope": result_db_scope(condition, task),

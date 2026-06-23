@@ -612,6 +612,88 @@ module user.types {
         self.assertIn("status: dry_run", result)
         self.assertEqual(path.read_text(encoding="utf-8"), before)
 
+    def test_dry_run_rejects_malformed_after_source_without_writing(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec {
+    interface {
+      type UserProfile
+    }
+  }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip()
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "replace_interface_item",
+            "item_kind": "type",
+            "name": "UserProfile",
+            "replacement": "      type UserProfile }",
+        }], dry_run=True)
+
+        self.assertIn("source_structure_invalid", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_duplicate_interface_function_effects_are_rejected(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module cache.kv {
+  spec {
+    interface {
+      fn get(key: CacheKey) -> Option
+        effects [reads_clock]
+    }
+  }
+  checks { }
+  implementation rust { }
+}
+""".lstrip(),
+            rel="src/cache/kv.nico",
+        )
+        path = workspace.root / "src/cache/kv.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/cache/kv.nico", [{
+            "op": "insert_after",
+            "section": "surface",
+            "target": "        effects [reads_clock]",
+            "text": "\n        effects [metrics.write]",
+        }])
+
+        self.assertIn("duplicate function effects", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_expected_count_rejects_non_integer_values(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec { interface { type UserProfile } }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip()
+        )
+
+        for value in ("1", 1.9, True):
+            with self.subTest(value=value):
+                result = apply_nico_edits(workspace, "src/user/types.nico", [{
+                    "op": "replace_identifier",
+                    "section": "implementation",
+                    "target": "UserProfile",
+                    "replacement": "UserRecord",
+                    "expected_count": value,
+                }])
+                self.assertIn("expected_count must be an integer", result)
+
     def test_edit_nico_maps_rs_source_path_to_nico_workspace_file(self) -> None:
         workspace = self.prepare_workspace(
             """
@@ -667,6 +749,32 @@ module user.profile_service {
         self.assertIn("only .nico files are accessible", wrong_suffix)
         self.assertIn("requires a condition C task workspace", no_workspace)
         self.assertIn("only available in condition C", condition_a)
+
+    def test_removed_benchmark_specific_op_is_rejected_without_writing(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec { interface { type UserProfile } }
+  checks { }
+  implementation rust {
+    pub struct UserProfile;
+  }
+}
+""".lstrip()
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = run_experiment.execute_tool("edit_nico", {
+            "path": "src/user/types.nico",
+            "edits": [{
+                "op": "update_user_profile_timestamp_surface",
+                "section": "surface",
+            }],
+        }, "C", "E1", workspace=workspace)
+
+        self.assertIn("unknown op", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_changeset_records_workspace_modification_only(self) -> None:
         workspace = self.prepare_workspace(

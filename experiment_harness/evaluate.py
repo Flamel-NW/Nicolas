@@ -30,6 +30,16 @@ REQUIRED_SCORED_FIELDS = (
     "compile_rate",
     "compile_rate_method",
 )
+SCORING_INPUT_REQUIRED_FIELDS = (
+    "schema",
+    "final_answer",
+    "workspace_path",
+    "changed_files",
+    "changeset_summary",
+    "compact_diffs",
+    "write_tool_calls",
+    "validation_summary",
+)
 
 
 def load_golden(task: str) -> str:
@@ -135,24 +145,101 @@ def build_scoring_input_from_record(record: dict) -> dict:
     """Return the evaluator-facing scoring context for old and new result JSON."""
     existing = record.get("scoring_input")
     if isinstance(existing, dict):
-        return existing
+        validation_errors = scoring_input_validation_errors(existing, record)
+        if not validation_errors:
+            return scoring_input_with_integrity(existing, self_contained=True, validation_errors=[])
+        return fallback_scoring_input(record, validation_errors)
 
+    return fallback_scoring_input(record, ["missing_scoring_input"])
+
+
+def scoring_input_with_integrity(
+    scoring_input: dict,
+    *,
+    self_contained: bool,
+    validation_errors: list[str],
+    fallback_sources: list[str] | None = None,
+) -> dict:
+    result = dict(scoring_input)
+    integrity = dict(result.get("evidence_integrity") or {})
+    integrity.update({
+        "self_contained": self_contained,
+        "source": "result.scoring_input" if self_contained else "evaluator_fallback",
+        "validation_errors": validation_errors,
+    })
+    if fallback_sources is not None:
+        integrity["fallback_sources"] = fallback_sources
+    result["evidence_integrity"] = integrity
+    return result
+
+
+def scoring_input_validation_errors(scoring_input: dict, record: dict) -> list[str]:
+    errors: list[str] = []
+    missing = [field for field in SCORING_INPUT_REQUIRED_FIELDS if field not in scoring_input]
+    if missing:
+        errors.append(f"missing_fields:{','.join(missing)}")
+    if scoring_input.get("schema") != "t3-scoring-input-v1":
+        errors.append(f"unexpected_schema:{scoring_input.get('schema')}")
+
+    changeset = record_changeset(record)
+    if isinstance(changeset, dict):
+        if scoring_input.get("changed_files") != changeset.get("changed_files", []):
+            errors.append("changed_files_mismatch")
+        if scoring_input.get("changeset_summary") != changeset.get("summary"):
+            errors.append("changeset_summary_mismatch")
+        if scoring_input.get("compact_diffs") != changeset.get("diffs", []):
+            errors.append("compact_diffs_mismatch")
+
+    record_write_calls = record.get("write_tool_calls")
+    if isinstance(record_write_calls, list) and scoring_input.get("write_tool_calls") != record_write_calls:
+        errors.append("write_tool_calls_mismatch")
+
+    validation_summary = record.get("validation_summary")
+    if isinstance(validation_summary, dict) and scoring_input.get("validation_summary") != validation_summary:
+        errors.append("validation_summary_mismatch")
+
+    return errors
+
+
+def record_changeset(record: dict) -> dict | None:
     workspace_record = record.get("workspace") if isinstance(record.get("workspace"), dict) else None
     changeset = record.get("workspace_changeset")
     if not isinstance(changeset, dict) and workspace_record:
         changeset = workspace_record.get("changeset")
+    return changeset if isinstance(changeset, dict) else None
+
+
+def fallback_scoring_input(record: dict, validation_errors: list[str]) -> dict:
+    fallback_sources: list[str] = []
+
+    workspace_record = record.get("workspace") if isinstance(record.get("workspace"), dict) else None
+    changeset = record.get("workspace_changeset")
+    if isinstance(changeset, dict):
+        fallback_sources.append("workspace_changeset")
+    if not isinstance(changeset, dict) and workspace_record:
+        changeset = workspace_record.get("changeset")
+        if isinstance(changeset, dict):
+            fallback_sources.append("workspace.changeset")
     if not isinstance(changeset, dict) and workspace_record:
         changeset = load_workspace_changeset(workspace_record)
+        if isinstance(changeset, dict):
+            fallback_sources.append("workspace.changeset_file")
 
     write_tool_calls = record.get("write_tool_calls")
+    if isinstance(write_tool_calls, list):
+        fallback_sources.append("write_tool_calls")
     if not isinstance(write_tool_calls, list):
         write_tool_calls = fallback_write_tool_calls(record.get("tool_calls") or [])
+        if write_tool_calls:
+            fallback_sources.append("tool_calls")
 
     validation_summary = record.get("validation_summary")
     if not isinstance(validation_summary, dict):
         validation_summary = None
+    else:
+        fallback_sources.append("validation_summary")
 
-    return {
+    return scoring_input_with_integrity({
         "schema": "evaluator-fallback-scoring-input-v1",
         "final_answer": record.get("response", ""),
         "workspace_path": workspace_record.get("path") if workspace_record else None,
@@ -161,7 +248,7 @@ def build_scoring_input_from_record(record: dict) -> dict:
         "compact_diffs": changeset.get("diffs", []) if isinstance(changeset, dict) else [],
         "write_tool_calls": write_tool_calls,
         "validation_summary": validation_summary,
-    }
+    }, self_contained=False, validation_errors=validation_errors, fallback_sources=fallback_sources)
 
 
 def load_workspace_changeset(workspace_record: dict) -> dict | None:

@@ -176,6 +176,33 @@ module cache.kv {
         self.assertEqual(statuses["c.nico"], "added")
         self.assertTrue((workspace.root / task_workspace.CHANGESET_FILENAME).exists())
 
+    def test_changeset_uses_frozen_before_text_not_live_source(self) -> None:
+        baseline = self.write("experiment_harness/materials/condition_C/e1/a.nico", "old a\n")
+        workspace = task_workspace.prepare_task_workspace(
+            "E1", "C", "E1_C_v3_run01_20260613T000005Z", None, self.workspace_root
+        )
+
+        baseline.write_text("mutated baseline\n", encoding="utf-8")
+        (workspace.root / "a.nico").write_text("new a\n", encoding="utf-8")
+        changeset = task_workspace.compute_changeset(workspace)
+
+        self.assertIn("-old a", changeset["diffs"][0]["diff"])
+        self.assertNotIn("mutated baseline", changeset["diffs"][0]["diff"])
+
+    def test_workspace_root_rejects_materials_public_src_and_source_root(self) -> None:
+        self.write("experiment_harness/materials/condition_C/e1/a.nico", "old a\n")
+        self.write("Nicolas/src/user/types.nico", "module user.types {}\n")
+
+        for bad_root in (
+            self.materials / "condition_C/e1/workspaces",
+            self.repo / "src/workspaces",
+        ):
+            with self.subTest(root=bad_root):
+                with self.assertRaises(task_workspace.WorkspaceError):
+                    task_workspace.prepare_task_workspace(
+                        "E1", "C", "E1_C_v3_run01_bad", None, bad_root
+                    )
+
     def test_resolver_rejects_unsafe_wrong_suffix_and_ambiguous_paths(self) -> None:
         self.write("experiment_harness/materials/condition_C/e1/good.nico", "ok\n")
         workspace = task_workspace.prepare_task_workspace(
@@ -189,7 +216,7 @@ module cache.kv {
         resolved = task_workspace.resolve_workspace_file(workspace, "good.nico")
         self.assertEqual(resolved, workspace.root / "good.nico")
 
-        for bad_path in ("../good.nico", "/tmp/good.nico", "good.rs", "dup.nico"):
+        for bad_path in ("../good.nico", "/tmp/good.nico", "good.rs", "dup.nico", "src/missing/good.nico"):
             with self.subTest(path=bad_path):
                 with self.assertRaises(task_workspace.WorkspaceError):
                     task_workspace.resolve_workspace_file(workspace, bad_path)

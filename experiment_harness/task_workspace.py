@@ -55,6 +55,26 @@ def _path_is_under(path: Path, root: Path) -> bool:
         return False
 
 
+def _resolved(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
+def _validate_workspace_root(workspace_root: Path, source_root: Path) -> None:
+    root = _resolved(Path(workspace_root))
+    forbidden_roots = [
+        MATERIALS_DIR,
+        NICOLAS_ROOT / "src",
+        source_root,
+    ]
+    for forbidden in forbidden_roots:
+        forbidden_resolved = _resolved(forbidden)
+        if root == forbidden_resolved or _path_is_under(root, forbidden_resolved):
+            raise WorkspaceError(
+                "workspace_root must not be inside task materials, public src, "
+                f"or the selected source root: '{workspace_root}'"
+            )
+
+
 def _is_safe_relative_request(path: Path) -> bool:
     return not path.is_absolute() and ".." not in path.parts
 
@@ -120,6 +140,7 @@ def plan_task_workspace(
         raise WorkspaceError("isolated task workspaces are currently only defined for condition C")
 
     source_root, source_kind, copy_policy = _select_condition_c_source(task)
+    _validate_workspace_root(workspace_root, source_root)
     batch_segment = _safe_path_segment(batch_id, "unbatched")
     run_segment = _safe_path_segment(run_id, "run")
     root = Path(workspace_root) / batch_segment / run_segment
@@ -141,6 +162,7 @@ def prepare_task_workspace(
         raise WorkspaceError("isolated task workspaces are currently only defined for condition C")
 
     source_root, source_kind, copy_policy = _select_condition_c_source(task)
+    _validate_workspace_root(workspace_root, source_root)
     batch_segment = _safe_path_segment(batch_id, "unbatched")
     run_segment = _safe_path_segment(run_id, "run")
     root = Path(workspace_root) / batch_segment / run_segment
@@ -192,6 +214,7 @@ def snapshot_manifest(workspace: TaskWorkspace | Path) -> dict:
             "path": rel,
             "bytes": size,
             "sha256": _sha256(path),
+            "utf8_text": _read_text_for_diff(path),
         })
 
     manifest = {
@@ -229,7 +252,6 @@ def resolve_workspace_file(
     candidate_rels = [requested]
     if requested.parts and requested.parts[0] == "src" and len(requested.parts) > 1:
         candidate_rels.append(Path(*requested.parts[1:]))
-    candidate_rels.append(Path(requested.name))
 
     seen: set[str] = set()
     for rel in candidate_rels:
@@ -242,16 +264,17 @@ def resolve_workspace_file(
         if resolved is not None:
             return resolved
 
-    matches = []
-    for candidate in sorted(root.rglob(requested.name)):
-        resolved = _safe_existing_file(candidate, root, suffix, raise_on_symlink=True)
-        if resolved is not None:
-            matches.append(resolved)
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        rel_matches = [m.relative_to(root).as_posix() for m in matches]
-        raise WorkspaceError(f"ambiguous file name '{requested.name}'. Use one of: {rel_matches}")
+    if len(requested.parts) == 1:
+        matches = []
+        for candidate in sorted(root.rglob(requested.name)):
+            resolved = _safe_existing_file(candidate, root, suffix, raise_on_symlink=True)
+            if resolved is not None:
+                matches.append(resolved)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            rel_matches = [m.relative_to(root).as_posix() for m in matches]
+            raise WorkspaceError(f"ambiguous file name '{requested.name}'. Use one of: {rel_matches}")
 
     available = [
         p.relative_to(root).as_posix()
@@ -336,7 +359,15 @@ def _file_diff(root: Path, before_manifest: dict, rel_path: str, status: str) ->
     source_root = _source_root_from_manifest(before_manifest)
     before_path = source_root / rel_path
     after_path = root / rel_path
-    before_text = "" if status == "added" else _read_text_for_diff(before_path)
+    before_by_path = {
+        entry.get("path"): entry
+        for entry in before_manifest.get("files", [])
+        if isinstance(entry, dict)
+    }
+    before_entry = before_by_path.get(rel_path) or {}
+    before_text = "" if status == "added" else before_entry.get("utf8_text")
+    if before_text is None and status != "added":
+        before_text = _read_text_for_diff(before_path)
     after_text = "" if status == "deleted" else _read_text_for_diff(after_path)
 
     if before_text is None or after_text is None:

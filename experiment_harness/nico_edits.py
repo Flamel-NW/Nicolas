@@ -9,7 +9,9 @@ auditable way to apply small source edits without rewriting whole modules.
 from __future__ import annotations
 
 import difflib
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -71,13 +73,12 @@ def apply_nico_edits(
         target_path = resolve_workspace_file(workspace, _normalize_nico_edit_path(path), suffix=".nico")
         before = target_path.read_text(encoding="utf-8")
         after, summaries = _apply_edit_batch(before, edits)
-        if not dry_run:
-            validation_errors = validate_nico_source_structure(after)
-            if validation_errors:
-                raise NicoEditError("source_structure_invalid: " + "; ".join(validation_errors))
+        validation_errors = validate_nico_source_structure(after)
+        if validation_errors:
+            raise NicoEditError("source_structure_invalid: " + "; ".join(validation_errors))
         if not dry_run and after != before:
-            target_path.write_text(after, encoding="utf-8")
-    except (WorkspaceError, NicoEditError, NicoSectionError, UnicodeDecodeError) as e:
+            _atomic_write_text(target_path, after)
+    except (WorkspaceError, NicoEditError, NicoSectionError, OSError, UnicodeDecodeError) as e:
         return f"Error: {e}"
 
     return _format_edit_result(workspace, target_path, before, after, summaries, dry_run=dry_run)
@@ -102,6 +103,8 @@ def validate_nico_source_structure(source: str) -> list[str]:
     for section in ("surface", "checks", "implementation"):
         try:
             section_spans[section] = extract_nico_section_span(source, section)
+            if not (module_open < section_spans[section][0] < section_spans[section][1] < module_close):
+                errors.append(f"{section} section is outside module block")
         except NicoSectionError as e:
             errors.append(str(e))
     if len(section_spans) == 3:
@@ -114,6 +117,9 @@ def validate_nico_source_structure(source: str) -> list[str]:
 
     try:
         interface_start, interface_end = extract_nested_block_span(source, "surface", "interface")
+        surface_start, surface_end = section_spans.get("surface", (0, len(source)))
+        if not (surface_start <= interface_start < interface_end <= surface_end):
+            errors.append("surface.interface block is outside surface section")
         errors.extend(_validate_interface_block(source[interface_start:interface_end]))
     except NicoSectionError as e:
         errors.append(str(e))
@@ -121,6 +127,26 @@ def validate_nico_source_structure(source: str) -> list[str]:
     if errors:
         return errors
     return []
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp.write(text)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def _normalize_nico_edit_path(path: str) -> str:
@@ -321,6 +347,7 @@ def _validate_interface_block(interface_block: str) -> list[str]:
         if close_line != "}":
             errors.append("surface.interface closing brace must be on its own line")
     previous_item: str | None = None
+    previous_fn_has_effects = False
     for line_number, masked_line in enumerate(masked_body.splitlines(), start=1):
         stripped = masked_line.strip()
         if not stripped:
@@ -333,13 +360,18 @@ def _validate_interface_block(interface_block: str) -> list[str]:
             continue
         if re.match(r"^type\s+[A-Za-z_][A-Za-z0-9_]*\b", stripped):
             previous_item = "type"
+            previous_fn_has_effects = False
             continue
         if re.match(r"^fn\s+[A-Za-z_][A-Za-z0-9_]*\b", stripped):
             previous_item = "fn"
+            previous_fn_has_effects = False
             continue
         if stripped.startswith("effects ["):
             if previous_item != "fn":
                 errors.append(f"surface.interface line {line_number} has effects without preceding function")
+            elif previous_fn_has_effects:
+                errors.append(f"surface.interface line {line_number} has duplicate function effects")
+            previous_fn_has_effects = True
             continue
         errors.append(f"surface.interface line {line_number} has unrecognized item syntax: {stripped[:80]}")
     return errors
@@ -462,13 +494,14 @@ def _interface_item_span(scoped: str, item_kind: str, name: str) -> tuple[int, i
         raise NicoEditError("surface.interface block has no closing brace")
 
     body = scoped[open_brace + 1:close_brace]
+    masked_body = mask_non_code(body)
     pattern = re.compile(rf"(?m)^[ \t]*{re.escape(item_kind)}\s+{re.escape(name)}\b")
-    matches = list(pattern.finditer(body))
+    matches = list(pattern.finditer(masked_body))
     if len(matches) != 1:
         raise NicoEditError(_interface_item_diagnostic(scoped, item_kind, name, len(matches)))
 
     item_start = open_brace + 1 + matches[0].start()
-    next_match = re.search(r"(?m)^[ \t]*(?:type|fn)\s+\w+\b", body[matches[0].end():])
+    next_match = re.search(r"(?m)^[ \t]*(?:type|fn)\s+\w+\b", masked_body[matches[0].end():])
     if next_match is None:
         item_end = close_brace
     else:
@@ -783,12 +816,9 @@ def _shorten(text: str, max_chars: int) -> str:
 def _expected_count(value: Any, index: int) -> int:
     if value is None:
         return 1
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise NicoEditError(f"edit #{index}: expected_count must be an integer")
-    try:
-        count = int(value)
-    except (TypeError, ValueError) as e:
-        raise NicoEditError(f"edit #{index}: expected_count must be an integer") from e
+    count = value
     if count < 1:
         raise NicoEditError(f"edit #{index}: expected_count must be >= 1")
     return count

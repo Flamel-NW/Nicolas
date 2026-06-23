@@ -66,6 +66,11 @@ IGNORED_SIGNATURE_TYPES = {
     "str",
     "u64",
 }
+EFFECT_SOURCE_SENTINELS = {
+    "reads_clock": ("clock::now(", "time::clock::now("),
+    "metrics.write": ("recorder::record(", "metrics::recorder::record("),
+    "audit.write": ("log::record(", "audit::log::record("),
+}
 
 dotenv_path = find_dotenv(usecwd=False, raise_error_if_not_found=False)
 if dotenv_path:
@@ -272,6 +277,33 @@ def actual_function_signatures(rs_text: str) -> dict[str, str]:
     return signatures
 
 
+def actual_function_bodies(rs_text: str) -> dict[str, str]:
+    bodies: dict[str, str] = {}
+    pattern = re.compile(r"\bpub\s+fn\s+([A-Za-z_]\w*)\s*\([^)]*\)\s*(?:->\s*[^{\n]+)?\s*\{")
+    for match in pattern.finditer(rs_text):
+        name = match.group(1)
+        open_brace = rs_text.find("{", match.start(), match.end())
+        close_brace = matching_rust_brace(rs_text, open_brace)
+        if close_brace > open_brace:
+            bodies[name] = rs_text[open_brace + 1:close_brace]
+    return bodies
+
+
+def matching_rust_brace(text: str, open_brace: int) -> int:
+    if open_brace < 0:
+        return -1
+    depth = 0
+    for index in range(open_brace, len(text)):
+        ch = text[index]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
 def signature_type_names(signature: str) -> set[str]:
     names = set(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", signature))
     return {name for name in names if name not in IGNORED_SIGNATURE_TYPES}
@@ -289,6 +321,7 @@ def validate_annotations(rs_path: Path, data: dict) -> list[str]:
             errors.append(f"{rs_path.name}: @nico-type {name!r} does not match any Rust type declaration")
 
     actual_fns = actual_function_signatures(rs_text)
+    actual_bodies = actual_function_bodies(rs_text)
     for fn_data in data.get("functions", []):
         name = fn_data["name"]
         actual_sig = actual_fns.get(name)
@@ -301,14 +334,89 @@ def validate_annotations(rs_path: Path, data: dict) -> list[str]:
                     f"{rs_path.name}: @nico-fn {name!r} signature mentions {type_name!r}, "
                     "but the Rust signature no longer does"
                 )
+        body = actual_bodies.get(name, "")
+        for call in fn_data.get("calls", []):
+            callee_module = call.get("callee_module", "")
+            callee_fn = call.get("callee_fn", "")
+            if not _call_has_source_evidence(body, callee_module, callee_fn):
+                errors.append(
+                    f"{rs_path.name}: @nico-fn {name!r} call {callee_module}::{callee_fn} "
+                    "does not match the Rust function body"
+                )
+        for effect in fn_data.get("effects", []):
+            if not _effect_has_source_evidence(module, name, effect, body, fn_data.get("calls", [])):
+                errors.append(
+                    f"{rs_path.name}: @nico-fn {name!r} effect {effect!r} "
+                    "does not match the Rust function body or annotated calls"
+                )
 
     annotated_imports = set(data.get("imports", []))
     material_imports = source_imports(rs_text, module) & SEMANTIC_IMPORT_MODULES
     missing_imports = sorted(material_imports - annotated_imports)
     for missing in missing_imports:
         errors.append(f"{rs_path.name}: Rust source imports {missing!r}, but @nico-imports omits it")
+    stale_imports = sorted((annotated_imports & SEMANTIC_IMPORT_MODULES) - material_imports)
+    for stale in stale_imports:
+        errors.append(f"{rs_path.name}: @nico-imports lists {stale!r}, but Rust source no longer imports it")
+
+    module_effects = set(data.get("module_effects", []))
+    function_effects = {
+        effect
+        for fn_data in data.get("functions", [])
+        for effect in fn_data.get("effects", [])
+    }
+    stale_module_effects = sorted(module_effects - function_effects)
+    for stale in stale_module_effects:
+        errors.append(f"{rs_path.name}: @nico-module-effects lists {stale!r}, but no @nico-fn carries it")
 
     return errors
+
+
+def _call_has_source_evidence(body: str, callee_module: str, callee_fn: str) -> bool:
+    if not callee_module or not callee_fn:
+        return False
+    module_tail = callee_module.rsplit(".", 1)[-1]
+    fully_qualified = f"crate::{callee_module.replace('.', '::')}::{callee_fn}("
+    imported_module_call = f"{module_tail}::{callee_fn}("
+    return fully_qualified in body or imported_module_call in body
+
+
+def _effect_has_source_evidence(
+    module: str,
+    function: str,
+    effect: str,
+    body: str,
+    calls: list[dict],
+) -> bool:
+    if effect == "reads_clock" and module == "time.clock" and function == "now":
+        return True
+    if effect == "metrics.write" and module == "metrics.recorder" and function == "record":
+        return True
+    if effect == "audit.write" and module == "audit.log" and function == "record":
+        return True
+    sentinels = EFFECT_SOURCE_SENTINELS.get(effect)
+    if not sentinels:
+        return True
+    if any(sentinel in body for sentinel in sentinels):
+        return True
+    return any(
+        _effect_call_matches(effect, call.get("callee_module", ""), call.get("callee_fn", ""))
+        for call in calls
+    )
+
+
+def _effect_call_matches(effect: str, callee_module: str, callee_fn: str) -> bool:
+    return (
+        (
+            effect == "reads_clock"
+            and (
+                (callee_module == "time.clock" and callee_fn == "now")
+                or (callee_module == "cache.kv" and callee_fn in {"get", "set"})
+            )
+        )
+        or (effect == "metrics.write" and callee_module == "metrics.recorder" and callee_fn == "record")
+        or (effect == "audit.write" and callee_module == "audit.log" and callee_fn == "record")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -554,10 +662,16 @@ def main() -> None:
     else:
         print(f"\n  Computing manual token count ({D_MANUAL_PATH.name})...")
         manual_content = D_MANUAL_PATH.read_text(encoding="utf-8")
-        manual_tokens = count_manual_tokens(manual_content)
+        manual_tokens, manual_tokens_estimated = count_manual_tokens(manual_content)
+        if manual_tokens_estimated:
+            existing = load_existing_manual_token_data(D_MANUAL_TOKENS_PATH)
+            if existing is not None:
+                manual_tokens = existing["manual_tokens_per_turn"]
+                manual_tokens_estimated = existing["estimated"]
         token_data = {
             "manual_file": D_MANUAL_PATH.name,
             "manual_tokens_per_turn": manual_tokens,
+            "estimated": manual_tokens_estimated,
             "note": (
                 "Tokens contributed by the Condition D LLM Manual to each API call's "
                 "input_tokens when used as the system prompt."
@@ -572,7 +686,23 @@ def main() -> None:
     print("\nDone.")
 
 
-def count_manual_tokens(manual_content: str) -> int:
+def load_existing_manual_token_data(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    tokens = data.get("manual_tokens_per_turn")
+    if not isinstance(tokens, int):
+        return None
+    return {
+        "manual_tokens_per_turn": tokens,
+        "estimated": bool(data.get("estimated", False)),
+    }
+
+
+def count_manual_tokens(manual_content: str) -> tuple[int, bool]:
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -581,7 +711,7 @@ def count_manual_tokens(manual_content: str) -> int:
             model=MODEL, system=manual_content, messages=minimal_msg,
         )
         r_without = client.messages.count_tokens(model=MODEL, messages=minimal_msg)
-        return r_with.input_tokens - r_without.input_tokens
+        return r_with.input_tokens - r_without.input_tokens, False
     except AttributeError:
         try:
             import anthropic
@@ -595,13 +725,13 @@ def count_manual_tokens(manual_content: str) -> int:
                 model=MODEL, messages=minimal_msg,
                 betas=["token-counting-2024-11-01"],
             )
-            return r_with.input_tokens - r_without.input_tokens
+            return r_with.input_tokens - r_without.input_tokens, False
         except Exception as e:
             print(f"  WARNING: token count API failed ({e}) — using character estimate.")
-            return len(manual_content) // 3
+            return len(manual_content) // 3, True
     except Exception as e:
         print(f"  WARNING: token count API failed ({e}) — using character estimate.")
-        return len(manual_content) // 3
+        return len(manual_content) // 3, True
 
 
 if __name__ == "__main__":

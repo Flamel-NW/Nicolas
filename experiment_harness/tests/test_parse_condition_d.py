@@ -1,7 +1,9 @@
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -82,6 +84,60 @@ pub fn write_window(_key: CacheKey) {
 """
         )
         self.assertTrue(any("omits it" in error and "cache.kv" in error for error in errors))
+
+    def test_stale_semantic_import_fails(self) -> None:
+        errors = self.validate(
+            """// @nico-module: rate.limiter
+// @nico-intent: Example.
+// @nico-imports: cache.kv
+// @nico-module-effects:
+// @nico-fn: write_window | pub fn write_window() -> () | effects= | calls=
+
+pub fn write_window() {}
+"""
+        )
+        self.assertTrue(any("@nico-imports lists 'cache.kv'" in error for error in errors))
+
+    def test_stale_call_annotation_fails(self) -> None:
+        errors = self.validate(
+            """// @nico-module: rate.limiter
+// @nico-intent: Example.
+// @nico-imports: cache.kv
+// @nico-module-effects: reads_clock
+// @nico-fn: write_window | pub fn write_window(key: CacheKey) -> () | effects=reads_clock | calls=cache.kv::set
+
+use crate::cache::kv;
+use crate::cache::kv::CacheKey;
+
+pub fn write_window(_key: CacheKey) {
+    let _ = kv::get(_key);
+}
+"""
+        )
+        self.assertTrue(any("call cache.kv::set" in error for error in errors))
+
+    def test_stale_effect_annotation_fails_for_known_effects(self) -> None:
+        errors = self.validate(
+            """// @nico-module: cache.example
+// @nico-intent: Example.
+// @nico-imports:
+// @nico-module-effects: reads_clock
+// @nico-fn: touch | pub fn touch() -> () | effects=reads_clock | calls=
+
+pub fn touch() {}
+"""
+        )
+        self.assertTrue(any("effect 'reads_clock'" in error for error in errors))
+
+    def test_manual_token_fallback_reports_estimated(self) -> None:
+        fake_anthropic = types.SimpleNamespace(
+            Anthropic=lambda: (_ for _ in ()).throw(RuntimeError("token API unavailable"))
+        )
+        with patch.dict(sys.modules, {"anthropic": fake_anthropic}):
+            tokens, estimated = parse_condition_d.count_manual_tokens("abc" * 30)
+
+        self.assertGreater(tokens, 0)
+        self.assertIs(estimated, True)
 
 
 if __name__ == "__main__":

@@ -23,16 +23,13 @@ Use the condition C tools to apply the requested changes to the task workspace:
    module-level `effects [...]`; use `update_module_imports` and
    `update_module_effects` so function-level effects are not matched by
    mistake.
-   For E1/E5-style propagation tasks, call `semantic_query affected_modules`
-   first and use the returned `source_edit_plan`. The older
-   `source_effect_update_plan` is only a module-effect subset; prefer
-   `source_edit_plan` when both are present. Every `action=add_module_effect`
-   row is a required workspace source edit: call `edit_nico` with
-   `update_module_effects` for that module. Every `action=verify_no_change` row
-   must be left unchanged; do not call no-op edits for those rows. If a function
-   row says `action=add_function_effect`, use `update_interface_function_effects`
-   for that function. Do not treat DB `propagated_effects` as a substitute for
-   updating the `.nico` module-level `effects [...]` source.
+   For propagation tasks, call `semantic_query affected_modules` first and use
+   the returned `source_edit_plan`. The older `source_effect_update_plan` is
+   only a module-effect subset; prefer `source_edit_plan` when both are
+   present. Rows marked `required_edit=true` are required workspace source
+   edits. Rows marked `required_edit=false` or `no_op_edit=forbidden` must be
+   left unchanged. Do not treat DB `propagated_effects` as a substitute for
+   updating `.nico` source when `source_edit_plan` requires a source change.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass.

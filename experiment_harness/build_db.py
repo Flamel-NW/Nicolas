@@ -284,7 +284,7 @@ def compute_propagated_effects(trusted: sqlite3.Connection) -> None:
 # Token counting
 # ---------------------------------------------------------------------------
 
-def count_manual_tokens(manual_content: str) -> int:
+def count_manual_tokens(manual_content: str) -> tuple[int, bool]:
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -299,7 +299,7 @@ def count_manual_tokens(manual_content: str) -> int:
             model=MODEL,
             messages=minimal_msg,
         )
-        return r_with.input_tokens - r_without.input_tokens
+        return r_with.input_tokens - r_without.input_tokens, False
     except AttributeError:
         try:
             import anthropic
@@ -316,13 +316,13 @@ def count_manual_tokens(manual_content: str) -> int:
                 messages=minimal_msg,
                 betas=["token-counting-2024-11-01"],
             )
-            return r_with.input_tokens - r_without.input_tokens
+            return r_with.input_tokens - r_without.input_tokens, False
         except Exception as e:
             print(f"  WARNING: token count API failed ({e}) — using character estimate.")
-            return len(manual_content) // 3
+            return len(manual_content) // 3, True
     except Exception as e:
         print(f"  WARNING: token count API failed ({e}) — using character estimate.")
-        return len(manual_content) // 3
+        return len(manual_content) // 3, True
 
 
 # ---------------------------------------------------------------------------
@@ -420,11 +420,17 @@ def main() -> None:
 
     print(f"\n  Computing manual token count ({MANUAL_PATH.name})...")
     manual_content = MANUAL_PATH.read_text(encoding="utf-8")
-    manual_tokens = count_manual_tokens(manual_content)
+    manual_tokens, manual_tokens_estimated = count_manual_tokens(manual_content)
+    if manual_tokens_estimated:
+        existing = load_existing_manual_token_data(MANUAL_TOKENS_PATH)
+        if existing is not None:
+            manual_tokens = existing["manual_tokens_per_turn"]
+            manual_tokens_estimated = existing["estimated"]
 
     token_data = {
         "manual_file": MANUAL_PATH.name,
         "manual_tokens_per_turn": manual_tokens,
+        "estimated": manual_tokens_estimated,
         "note": (
             "Tokens contributed by the Nicolas LLM Manual to each API call's "
             "input_tokens when used as the system prompt. Subtract "
@@ -437,6 +443,22 @@ def main() -> None:
     print(f"  manual_tokens_per_turn = {manual_tokens}")
     print(f"  Saved to {MANUAL_TOKENS_PATH.name}")
     print("\nDone.")
+
+
+def load_existing_manual_token_data(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    tokens = data.get("manual_tokens_per_turn")
+    if not isinstance(tokens, int):
+        return None
+    return {
+        "manual_tokens_per_turn": tokens,
+        "estimated": bool(data.get("estimated", False)),
+    }
 
 
 if __name__ == "__main__":
