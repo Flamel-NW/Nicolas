@@ -23,19 +23,31 @@ Use the condition C tools to apply the requested changes to the task workspace:
    module-level `effects [...]`; use `update_module_imports` and
    `update_module_effects` so function-level effects are not matched by
    mistake.
+   Do not run routine dry-run previews. Apply structural ops directly, and
+   apply exact-anchor edits directly when you have just read the source section
+   containing the exact anchor. Dry-run is only for genuinely uncertain anchors
+   that cannot be made safe with a narrow source read.
    For propagation tasks, call `semantic_query affected_modules` first and use
    the returned `source_edit_plan`. The older `source_effect_update_plan` is
    only a module-effect subset; prefer `source_edit_plan` when both are
    present. Rows marked `required_edit=true` are required workspace source
-   edits. Rows marked `required_edit=false` or `no_op_edit=forbidden` must be
-   left unchanged. Do not treat DB `propagated_effects` as a substitute for
+   edits. For type or constructor shape changes, required `checks_examples`
+   and `call_sites` categories mean every stale example or call site must be
+   updated or explicitly verified unchanged. Rows marked `required_edit=false`
+   or `no_op_edit=forbidden` only forbid edits for that row's effect action;
+   they do not cancel required example, check, or call-site updates from type
+   dependency rows. Do not treat DB `propagated_effects` as a substitute for
    updating `.nico` source when `source_edit_plan` requires a source change.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
-   repeat the full fact discovery pass.
+   repeat the full fact discovery pass. For implementation exact-anchor edits,
+   do not invent or assume an anchor such as a `use` line that may not exist;
+   use exact text copied from the narrow source section you just read, or use a
+   structural implementation-function edit when changing a whole function.
 5. Stop rule: once all `source_edit_plan required_edit=true` edits have been
-   applied, do at most one necessary validation pass, then immediately stop
-   editing and produce the compact final answer. Do not run no-change edits,
+   applied and all required rows' completion gates have been satisfied, do at
+   most one necessary validation pass, then immediately stop editing and
+   produce the compact final answer. Do not run no-change edits,
    dry-run previews, comment/doc-only edits, formatting cleanup, broad
    re-validation loops, or repeated readbacks after the required edits are
    already applied. The edit tool performs source structure validation; if it

@@ -522,6 +522,30 @@ module cache.kv {
         self.assertIn("fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()\n        effects [reads_clock]", changed)
         self.assertIn("    effects [reads_clock]", changed)
 
+    def test_e5_metrics_import_insertion_uses_existing_implementation_anchor(self) -> None:
+        workspace = self.prepare_workspace(
+            (Path(__file__).resolve().parents[1] / "materials/condition_C/e5/kv.nico").read_text(
+                encoding="utf-8"
+            ),
+            rel="kv.nico",
+        )
+
+        result = apply_nico_edits(workspace, "kv.nico", [{
+            "op": "insert_before",
+            "section": "implementation",
+            "target": "    /// Opaque cache key.",
+            "text": "    use metrics::recorder::{self, MetricName, MetricValue};\n\n",
+        }])
+
+        self.assertIn("status: applied", result)
+        self.assertIn("insert_before section=implementation matches=1", result)
+        changed = (workspace.root / "kv.nico").read_text(encoding="utf-8")
+        self.assertIn("use metrics::recorder::{self, MetricName, MetricValue};", changed)
+        self.assertLess(
+            changed.index("use metrics::recorder::{self, MetricName, MetricValue};"),
+            changed.index("    /// Opaque cache key."),
+        )
+
     def test_structural_insert_missing_interface_is_atomic(self) -> None:
         workspace = self.prepare_workspace(
             """
@@ -764,11 +788,12 @@ module user.types {
         )
         path = workspace.root / "src/user/types.nico"
         before = path.read_text(encoding="utf-8")
+        removed_op = "update_user_profile" + "_timestamp_surface"
 
         result = run_experiment.execute_tool("edit_nico", {
             "path": "src/user/types.nico",
             "edits": [{
-                "op": "update_user_profile_timestamp_surface",
+                "op": removed_op,
                 "section": "surface",
             }],
         }, "C", "E1", workspace=workspace)

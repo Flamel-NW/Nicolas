@@ -634,6 +634,8 @@ def _provider_type_edit_plan_lines(
         f"- {provider} edit_path={edit_path} action=update_type_surface "
         f"type={type_name} categories=interface_type,interface_function,"
         "implementation,checks_examples,imports_effects "
+        "required_sections=surface,checks,implementation "
+        "completion_gate=type_surface,constructor_signature,implementation,checks_examples "
         "required_edit=true reason=provider_module_type_shape_changed"
     ]
     for row in dependent_rows:
@@ -645,6 +647,7 @@ def _provider_type_edit_plan_lines(
         lines.append(
             f"- {module} edit_path={dep_path} action=review_type_dependency "
             f"type={type_name} categories=imports,checks_examples,call_sites "
+            "completion_gate=update_or_verify_all_type_references "
             f"required_edit=true{example_text} reason={reason}"
         )
     return lines

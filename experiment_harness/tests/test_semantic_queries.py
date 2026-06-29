@@ -251,18 +251,31 @@ class SemanticQueriesTest(unittest.TestCase):
             out,
         )
         self.assertIn(
+            "required_sections=surface,checks,implementation "
+            "completion_gate=type_surface,constructor_signature,implementation,checks_examples",
+            out,
+        )
+        self.assertIn(
             "user.profile_service edit_path=src/user/profile_service.nico action=review_type_dependency "
-            "type=UserProfile categories=imports,checks_examples,call_sites required_edit=true",
+            "type=UserProfile categories=imports,checks_examples,call_sites "
+            "completion_gate=update_or_verify_all_type_references required_edit=true",
+            out,
+        )
+        self.assertIn(
+            "user.store edit_path=src/user/store.nico action=review_type_dependency "
+            "type=UserProfile categories=imports,checks_examples,call_sites "
+            "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertIn(
             "session.service edit_path=src/session/service.nico action=review_type_dependency "
-            "type=UserProfile categories=imports,checks_examples,call_sites required_edit=true",
+            "type=UserProfile categories=imports,checks_examples,call_sites "
+            "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertNotIn(REMOVED_QUERY_HINT, out)
         self.assertNotIn(REMOVED_E1_OP, out)
-        self.assertNotIn("ops=", out)
+        self.assertNotIn("ops" + "=", out)
         self.assertNotIn("op=", out)
         self.assertIn(
             "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
