@@ -151,6 +151,47 @@ class ScoringInputTest(unittest.TestCase):
         self.assertIn("max_turns_reached", validation["audit_risk_flags"])
         self.assertIn("final_answer_protocol_missing", validation["audit_risk_flags"])
 
+    def test_validation_summary_flags_effect_edit_with_unchanged_implementation_body(self) -> None:
+        output = (
+            "status: applied\n"
+            "path: src/cache/kv.nico\n"
+            "edits: 2\n"
+            "- edit #1: update_interface_function_effects section=surface.interface matches=1\n"
+            "- edit #2: replace_implementation_function section=implementation matches=1 "
+            "implementation_body_changed=false\n"
+            "diff_truncated: false\n"
+            "diff:\n"
+            "--- before/src/cache/kv.nico\n"
+            "+++ after/src/cache/kv.nico\n"
+        )
+        write_calls = run_experiment.summarize_write_tool_calls([{
+            "turn": 4,
+            "tool": "edit_nico",
+            "input": {
+                "path": "src/cache/kv.nico",
+                "edits": [
+                    {"op": "update_interface_function_effects"},
+                    {"op": "replace_implementation_function"},
+                ],
+            },
+            "full_output": output,
+        }])
+
+        self.assertTrue(write_calls[0]["implementation_body_unchanged"])
+        self.assertTrue(write_calls[0]["effect_or_import_edit"])
+
+        validation = run_experiment.build_validation_summary(
+            None,
+            {
+                **self.changeset(),
+                "changed_files": ["src/cache/kv.nico"],
+                "diffs": [{"path": "src/cache/kv.nico", "diff_truncated": False}],
+            },
+            write_calls,
+        )
+
+        self.assertIn("implementation_body_unchanged", validation["audit_risk_flags"])
+
     def test_validation_summary_does_not_mark_clean_end_turn_at_max_turn(self) -> None:
         response = """
 Summary:

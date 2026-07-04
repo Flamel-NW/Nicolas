@@ -417,7 +417,11 @@ def get_tools(condition: str) -> list[dict]:
             "Supported query values: module_surface, module_dependents, type_dependents, "
             "function_callers, effect_chain, affected_modules."
             " For affected_modules, pass function when the requested effect update is"
-            " scoped to a specific function."
+            " scoped to a specific function. Pass type_name for named type shape"
+            " changes; pass both function and effect for function-scoped behavior"
+            " or effect changes. If affected_modules returns"
+            " source_edit_plan_status=needs_filter, rerun it with the missing filter"
+            " before editing."
         ),
         "input_schema": {
             "type": "object",
@@ -440,15 +444,15 @@ def get_tools(condition: str) -> list[dict]:
                 },
                 "function": {
                     "type": "string",
-                    "description": "Function name for function_callers or effect_chain.",
+                    "description": "Function name for function_callers, effect_chain, or function-scoped affected_modules.",
                 },
                 "type_name": {
                     "type": "string",
-                    "description": "Type name for type_dependents, e.g. UserProfile.",
+                    "description": "Type name for type_dependents or named type shape changes in affected_modules, e.g. UserProfile.",
                 },
                 "effect": {
                     "type": "string",
-                    "description": "Optional effect filter for effect_chain or affected_modules, e.g. reads_clock.",
+                    "description": "Optional effect filter for effect_chain or affected_modules, e.g. reads_clock. Use with function for function-scoped changes.",
                 },
                 "transitive": {
                     "type": "boolean",
@@ -476,7 +480,10 @@ def get_tools(condition: str) -> list[dict]:
             "batch is atomic: any failed check or "
             "source structure validation error leaves the file unchanged. When an implementation "
             "item already exists, update it with replace_text or replace_implementation_function; "
-            "do not insert a duplicate implementation item."
+            "do not insert a duplicate implementation item. For replace_text on an existing "
+            "Rust struct, enum, or type in implementation, use the complete item as the target, "
+            "not only the declaration line. For implementation_required source_edit_plan rows, "
+            "doc/comment-only implementation edits are incomplete; the function body must change."
         ),
         "input_schema": {
             "type": "object",
@@ -685,6 +692,16 @@ def summarize_write_tool_calls(tool_calls: list[dict]) -> list[dict]:
         output_preview = call.get("output_preview")
         if output_preview is None:
             output_preview = output[:300] + ("..." if len(output) > 300 else "")
+        implementation_body_unchanged = "implementation_body_changed=false" in output
+        implementation_body_changed = "implementation_body_changed=true" in output
+        effect_or_import_edit = any(
+            marker in output
+            for marker in (
+                "update_interface_function_effects",
+                "update_module_imports",
+                "update_module_effects",
+            )
+        )
         write_calls.append({
             "call_index": index,
             "turn": call.get("turn"),
@@ -693,6 +710,9 @@ def summarize_write_tool_calls(tool_calls: list[dict]) -> list[dict]:
             "edit_count": len(edits) if isinstance(edits, list) else None,
             "result_status": result_status,
             "diff_truncated": _parse_bool(parsed.get("diff_truncated")),
+            "implementation_body_changed": implementation_body_changed,
+            "implementation_body_unchanged": implementation_body_unchanged,
+            "effect_or_import_edit": effect_or_import_edit,
             "output_preview": output_preview,
         })
     return write_calls
@@ -721,6 +741,11 @@ def build_validation_summary(
     audit_risk_flags = []
     error_calls = [call for call in write_tool_calls if call.get("result_status") == "error"]
     applied_calls = [call for call in write_tool_calls if call.get("result_status") == "applied"]
+    effect_or_import_paths = {
+        call.get("path")
+        for call in applied_calls
+        if call.get("effect_or_import_edit") and call.get("path")
+    }
     dry_run_calls = [
         call for call in write_tool_calls
         if call.get("dry_run") or call.get("result_status") in {"dry_run", "no_change_dry_run"}
@@ -738,6 +763,17 @@ def build_validation_summary(
     if error_calls:
         warnings.append("one or more edit_nico calls returned an error")
         audit_risk_flags.append("edit_nico_error")
+    if any(
+        call.get("result_status") == "applied"
+        and call.get("implementation_body_unchanged")
+        and call.get("path") in effect_or_import_paths
+        for call in write_tool_calls
+    ):
+        warnings.append(
+            "one or more edit_nico calls changed effects/imports but left the "
+            "implementation function body unchanged"
+        )
+        audit_risk_flags.append("implementation_body_unchanged")
     if any("source_structure_invalid" in str(call.get("output_preview", "")) for call in error_calls):
         warnings.append("one or more edit_nico calls failed source structure validation")
         audit_risk_flags.append("source_structure_invalid")

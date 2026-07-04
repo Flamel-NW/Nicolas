@@ -577,6 +577,7 @@ module cache.kv {
         self.assertIn("replace_interface_item section=surface.interface matches=1", result)
         self.assertIn("update_interface_function_effects section=surface.interface matches=1", result)
         self.assertIn("replace_implementation_function section=implementation matches=1", result)
+        self.assertIn("implementation_body_changed=true", result)
         changed = (workspace.root / "src/cache/kv.nico").read_text(encoding="utf-8")
         self.assertIn("type CacheTtl    // 不透明 TTL 时长；内部表示：u64（秒）", changed)
         self.assertIn("fn get(key: CacheKey) -> Option\n        effects [reads_clock, metrics.write]", changed)
@@ -584,6 +585,75 @@ module cache.kv {
         self.assertIn("pub fn set(key: CacheKey, value: String, ttl: CacheTtl)", changed)
         self.assertIn("fn set(key: CacheKey, value: String, ttl: CacheTtl) -> ()\n        effects [reads_clock]", changed)
         self.assertIn("    effects [reads_clock]", changed)
+
+    def test_implementation_replace_text_rejects_header_only_struct_anchor(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec { interface { type UserProfile } }
+  checks { }
+  implementation rust {
+    pub struct UserProfile {
+        pub id: UserId,
+        pub status: UserStatus,
+    }
+  }
+}
+""".lstrip()
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "replace_text",
+            "section": "implementation",
+            "target": "    pub struct UserProfile {",
+            "replacement": """    pub struct UserProfile {
+        pub id: UserId,
+        pub status: UserStatus,
+        pub last_login_at: Timestamp,
+    }""",
+        }])
+
+        self.assertIn("declaration line", result)
+        self.assertIn("complete existing item as the target", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_replace_implementation_function_reports_doc_only_body_unchanged(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module cache.kv {
+  spec {
+    interface {
+      fn get(key: CacheKey) -> Option
+        effects [reads_clock]
+    }
+    effects [reads_clock]
+  }
+  checks { }
+  implementation rust {
+    /// Look up a cache entry by key.
+    pub fn get(_key: CacheKey) -> Option<String> {
+        todo!("cache.kv::get: real implementation pending")
+    }
+  }
+}
+""".lstrip(),
+            rel="src/cache/kv.nico",
+        )
+
+        result = apply_nico_edits(workspace, "src/cache/kv.nico", [{
+            "op": "replace_implementation_function",
+            "function": "get",
+            "replacement": """    /// Look up a cache entry by key and record metrics.
+    pub fn get(_key: CacheKey) -> Option<String> {
+        todo!("cache.kv::get: real implementation pending")
+    }""",
+        }])
+
+        self.assertIn("status: applied", result)
+        self.assertIn("replace_implementation_function section=implementation matches=1", result)
+        self.assertIn("implementation_body_changed=false", result)
 
     def test_e5_metrics_import_insertion_uses_existing_implementation_anchor(self) -> None:
         workspace = self.prepare_workspace(

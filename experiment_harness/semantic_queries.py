@@ -617,7 +617,12 @@ def _source_edit_plan_lines(
             candidate_reasons,
         ))
     if not lines:
-        return ["- none (type_name, function, or effect required)"]
+        return [
+            "source_edit_plan_status=needs_filter",
+            "- none (type_name, function, or effect required)",
+            "- required_filter_hint: named type shape changes must pass type_name; "
+            "function-scoped effect or behavior changes must pass function and effect",
+        ]
     return lines
 
 
@@ -630,10 +635,14 @@ def _provider_type_edit_plan_lines(
     candidate_reasons: dict[str, str],
 ) -> list[str]:
     edit_path = _source_to_nico_edit_path(source_map.get(provider, "unknown"))
+    required_modules = [provider] + [row["module"] for row in dependent_rows]
     lines = [
         f"- {provider} edit_path={edit_path} action=update_type_surface "
+        f"work=type_provider required_work_id=type_provider:{provider}.{type_name} "
         f"type={type_name} categories=interface_type,interface_function,"
         "implementation,checks_examples,imports_effects "
+        "required_edit_summary=update_type_surface_constructor_implementation_checks_examples_imports_effects "
+        f"required_modules={_compact_list(required_modules)} "
         "required_sections=surface,checks,implementation "
         "provider_work=read_surface_checks_implementation_then_single_provider_batch "
         "implementation_policy=update_existing_items_do_not_insert_duplicates "
@@ -648,7 +657,9 @@ def _provider_type_edit_plan_lines(
         reason = candidate_reasons.get(module, "type_dependent")
         lines.append(
             f"- {module} edit_path={dep_path} work=type_reference action=review_type_dependency "
+            f"required_work_id=type_reference:{module}:{type_name} "
             f"type={type_name} categories=imports,checks_examples,call_sites "
+            "required_edit_summary=update_or_verify_imports_checks_examples_call_sites "
             "completion_gate=update_or_verify_all_type_references "
             f"required_edit=true{example_text} reason={reason}"
         )
@@ -680,7 +691,11 @@ def _function_effect_edit_plan_lines(
     no_op = " no_op_edit=forbidden" if has_effect else ""
     lines = [
         f"- {module}.{function} edit_path={edit_path} action={action} "
+        f"work=function_effect required_work_id=function_effect:{module}.{function}:{effect} "
         f"effect={effect} current_function_effects={_compact_list(current_effects)} "
+        "implementation_required=true "
+        "completion_gate=function_effect,module_effect,implementation_call,caller_boundaries "
+        "required_edit_summary=update_function_effect_and_implementation_call "
         f"required_edit={str(required).lower()}"
         f"{no_op} reason=function_effect_update"
     ]

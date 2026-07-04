@@ -193,6 +193,8 @@ def _apply_one_edit(source: str, edit: dict[str, Any], index: int) -> tuple[str,
     if op == "replace_text":
         target = _non_empty_string(edit, "target", index)
         replacement = _string_value(edit, "replacement", index)
+        if section == "implementation":
+            _reject_header_only_rust_item_replace(index, target, replacement)
         changed, count = _replace_text(scoped, target, replacement, expected_count, section)
     elif op == "insert_before":
         target = _non_empty_string(edit, "target", index)
@@ -262,7 +264,7 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         replacement = _string_value(edit, "replacement", index)
         start, end = extract_nico_section_span(source, "implementation")
         scoped = source[start:end]
-        changed, count = _replace_implementation_function(scoped, function, replacement)
+        changed, count, body_changed = _replace_implementation_function(scoped, function, replacement)
         section = "implementation"
     elif op == "update_module_imports":
         imports = _string_list(edit, "imports", index)
@@ -285,12 +287,15 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
     else:
         raise NicoEditError(f"edit #{index}: unhandled structural op '{op}'")
 
-    return source[:start] + changed + source[end:], {
+    summary = {
         "index": index,
         "op": op,
         "section": section,
         "matches": count,
     }
+    if op == "replace_implementation_function":
+        summary["implementation_body_changed"] = body_changed
+    return source[:start] + changed + source[end:], summary
 
 
 def _section_span(source: str, section: str) -> tuple[int, int]:
@@ -309,6 +314,31 @@ def _replace_text(
     count = scoped.count(target)
     _check_count(count, expected_count, "target", scoped, target, section)
     return scoped.replace(target, replacement), count
+
+
+def _reject_header_only_rust_item_replace(index: int, target: str, replacement: str) -> None:
+    stripped_target = target.strip()
+    if "\n" in stripped_target:
+        return
+    if "\n" not in replacement or "}" not in replacement:
+        return
+    if not _looks_like_rust_item_header(stripped_target):
+        return
+    raise NicoEditError(
+        f"edit #{index}: implementation replace_text target is only a Rust item "
+        "declaration line, but replacement contains a full item body; read the "
+        "implementation section and use the complete existing item as the target "
+        "so the atomic batch cannot leave duplicated fields or braces"
+    )
+
+
+def _looks_like_rust_item_header(line: str) -> bool:
+    masked = mask_non_code(line)
+    return bool(re.match(
+        r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\b.*\{\s*$",
+        masked,
+    ))
 
 
 def _insert_near(
@@ -477,13 +507,34 @@ def _replace_implementation_function(
     scoped: str,
     function: str,
     replacement: str,
-) -> tuple[str, int]:
+) -> tuple[str, int, bool]:
     matches = _implementation_function_spans(scoped, function)
     if len(matches) != 1:
         raise NicoEditError(_implementation_function_diagnostic(scoped, function, len(matches)))
     start, end = matches[0]
     replacement_text = _normalized_item_replacement(scoped, start, end, replacement)
-    return scoped[:start] + replacement_text + scoped[end:], 1
+    before_body = _rust_function_body_code(scoped[start:end], function)
+    replacement_body = _rust_function_body_code(replacement_text, function)
+    body_changed = before_body != replacement_body
+    return scoped[:start] + replacement_text + scoped[end:], 1, body_changed
+
+
+def _rust_function_body_code(text: str, function: str) -> str | None:
+    masked = mask_non_code(text)
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(function)}\s*\("
+    )
+    match = pattern.search(masked)
+    if match is None:
+        return None
+    open_brace = masked.find("{", match.end())
+    if open_brace < 0:
+        return None
+    close_brace = find_matching_brace(masked, open_brace)
+    if close_brace < 0:
+        return None
+    body = masked[open_brace + 1:close_brace]
+    return re.sub(r"\s+", "", body)
 
 
 def _reject_duplicate_implementation_insert(
@@ -997,9 +1048,15 @@ def _format_edit_result(
         f"edits: {len(summaries)}",
     ]
     for summary in summaries:
+        suffix = ""
+        if "implementation_body_changed" in summary:
+            suffix = (
+                " implementation_body_changed="
+                f"{str(summary['implementation_body_changed']).lower()}"
+            )
         lines.append(
             f"- edit #{summary['index']}: {summary['op']} "
-            f"section={summary['section']} matches={summary['matches']}"
+            f"section={summary['section']} matches={summary['matches']}{suffix}"
         )
     lines.append(f"diff_truncated: {str(truncated).lower()}")
     lines.append("diff:")

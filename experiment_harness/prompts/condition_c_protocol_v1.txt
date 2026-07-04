@@ -7,6 +7,12 @@ Use the condition C tools to apply the requested changes to the task workspace:
 1. Fact discovery: use `semantic_query` first for trusted module structure,
    affected modules, dependents, callers, and effect-chain facts. Use SQL only
    when a required trusted fact is not covered by a semantic query.
+   If the request changes the shape of a named type or its constructor, call
+   `semantic_query affected_modules` with both `module` and `type_name` before
+   editing. If the request changes a specific function's behavior or effect,
+   call `semantic_query affected_modules` with `module`, `function`, and
+   `effect` before editing. A `source_edit_plan_status=needs_filter` response
+   is not an executable edit plan; rerun the query with the missing filter.
 2. Narrow source read: use `read_nico_section` for the smallest relevant source
    section. Use `read_file` only as a last-resort full-file fallback.
 3. Required edits: use `edit_nico` to apply every source change to the
@@ -43,7 +49,14 @@ Use the condition C tools to apply the requested changes to the task workspace:
    covers imports/effects, interface type/function surface, checks/examples,
    and implementation. Existing implementation items must be updated, not
    inserted: use exact-anchor `replace_text` for existing structs/enums/types
-   and `replace_implementation_function` for existing functions.
+   and `replace_implementation_function` for existing functions. When replacing
+   an existing Rust struct, enum, or type with `replace_text`, the target must
+   be the complete item anchor copied from the just-read implementation
+   section, not only the declaration line.
+   Rows marked `implementation_required=true` require a real implementation
+   change. A doc/comment-only implementation edit does not satisfy the
+   completion gate; the function body must contain the newly required call or
+   behavior.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass. For implementation exact-anchor edits,

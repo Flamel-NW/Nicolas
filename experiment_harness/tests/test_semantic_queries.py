@@ -247,7 +247,13 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn("source_edit_plan:", out)
         self.assertIn(
             "user.types edit_path=src/user/types.nico action=update_type_surface "
+            "work=type_provider required_work_id=type_provider:user.types.UserProfile "
             "type=UserProfile categories=interface_type,interface_function,implementation,checks_examples,imports_effects",
+            out,
+        )
+        self.assertIn(
+            "required_edit_summary=update_type_surface_constructor_implementation_checks_examples_imports_effects "
+            "required_modules=user.types, audit.log, session.types, user.profile_service, user.store",
             out,
         )
         self.assertIn(
@@ -260,20 +266,26 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn(
             "user.profile_service edit_path=src/user/profile_service.nico work=type_reference "
             "action=review_type_dependency "
+            "required_work_id=type_reference:user.profile_service:UserProfile "
             "type=UserProfile categories=imports,checks_examples,call_sites "
+            "required_edit_summary=update_or_verify_imports_checks_examples_call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertIn(
             "user.store edit_path=src/user/store.nico work=type_reference action=review_type_dependency "
+            "required_work_id=type_reference:user.store:UserProfile "
             "type=UserProfile categories=imports,checks_examples,call_sites "
+            "required_edit_summary=update_or_verify_imports_checks_examples_call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertIn(
             "session.service edit_path=src/session/service.nico work=type_reference "
             "action=review_type_dependency "
+            "required_work_id=type_reference:session.service:UserProfile "
             "type=UserProfile categories=imports,checks_examples,call_sites "
+            "required_edit_summary=update_or_verify_imports_checks_examples_call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
@@ -299,6 +311,20 @@ class SemanticQueriesTest(unittest.TestCase):
             out,
         )
         self.assertIn("required_edit=false no_op_edit=forbidden", out)
+
+    def test_affected_modules_without_filter_requests_specific_filter(self) -> None:
+        out = run_semantic_query(
+            {
+                "query": "affected_modules",
+                "module": "user.types",
+            },
+            self.db_path,
+        )
+
+        self.assertIn("source_edit_plan:", out)
+        self.assertIn("source_edit_plan_status=needs_filter", out)
+        self.assertIn("named type shape changes must pass type_name", out)
+        self.assertIn("function-scoped effect or behavior changes must pass function and effect", out)
 
     def test_affected_modules_source_effect_plan_for_cache_metrics(self) -> None:
         out = run_semantic_query(
@@ -350,7 +376,11 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn("source_edit_plan:", out)
         self.assertIn(
             "cache.kv.get edit_path=src/cache/kv.nico action=add_function_effect "
+            "work=function_effect required_work_id=function_effect:cache.kv.get:metrics.write "
             "effect=metrics.write current_function_effects=reads_clock "
+            "implementation_required=true "
+            "completion_gate=function_effect,module_effect,implementation_call,caller_boundaries "
+            "required_edit_summary=update_function_effect_and_implementation_call "
             "required_edit=true",
             out,
         )
