@@ -211,6 +211,69 @@ module user.profile_service {
         self.assertLess(interface_insert, module_effects)
         self.assertGreater(impl_insert, changed.index("implementation rust"))
 
+    def test_insert_implementation_item_rejects_existing_type(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec { }
+  checks { }
+  implementation rust {
+    pub struct UserProfile {
+        pub id: UserId,
+    }
+  }
+}
+""".lstrip(),
+            rel="src/user/types.nico",
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "insert_implementation_item",
+            "item_kind": "type",
+            "name": "UserProfile",
+            "text": """
+    pub struct UserProfile {
+        pub id: UserId,
+        pub last_login_at: Timestamp,
+    }
+""".rstrip(),
+        }])
+
+        self.assertIn("duplicate implementation type 'UserProfile' already exists", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_insert_implementation_item_infers_duplicate_function(self) -> None:
+        workspace = self.prepare_workspace(
+            """
+module user.types {
+  spec { }
+  checks { }
+  implementation rust {
+    pub fn new_profile() -> UserProfile {
+        todo!()
+    }
+  }
+}
+""".lstrip(),
+            rel="src/user/types.nico",
+        )
+        path = workspace.root / "src/user/types.nico"
+        before = path.read_text(encoding="utf-8")
+
+        result = apply_nico_edits(workspace, "src/user/types.nico", [{
+            "op": "insert_implementation_item",
+            "text": """
+    pub fn new_profile(id: UserId) -> UserProfile {
+        todo!()
+    }
+""".rstrip(),
+        }])
+
+        self.assertIn("duplicate implementation fn 'new_profile' already exists", result)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
     def test_update_module_imports_and_missing_effects_insert_top_level_items(self) -> None:
         workspace = self.prepare_workspace(
             """

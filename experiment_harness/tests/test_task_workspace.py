@@ -110,6 +110,43 @@ class TaskWorkspaceTest(unittest.TestCase):
 
         self.assertIn("module cache.kv", content)
 
+    def test_condition_c_read_file_falls_back_to_unique_flat_basename(self) -> None:
+        self.write(
+            "experiment_harness/materials/condition_C/e5/kv.nico",
+            "module cache.kv { spec { intent \"flat\" } checks { } implementation rust { } }\n",
+        )
+        workspace = task_workspace.prepare_task_workspace(
+            "E5", "C", "E5_C_v3_run01_20260613T000003Z", None, self.workspace_root
+        )
+
+        content = run_experiment._read_file_condition_C("src/cache/kv.rs", "E5", workspace=workspace)
+        section = run_experiment._read_nico_section_condition_C(
+            "src/cache/kv.nico", "surface", "E5", workspace=workspace
+        )
+
+        self.assertIn("module cache.kv", content)
+        self.assertIn("path:", section)
+        self.assertIn("kv.nico", section)
+
+    def test_condition_c_read_file_reports_ambiguous_flat_basename(self) -> None:
+        self.write(
+            "experiment_harness/materials/condition_C/e5/a/kv.nico",
+            "module cache.kv { a }\n",
+        )
+        self.write(
+            "experiment_harness/materials/condition_C/e5/b/kv.nico",
+            "module cache.kv { b }\n",
+        )
+        workspace = task_workspace.prepare_task_workspace(
+            "E5", "C", "E5_C_v3_run01_20260613T000004Z", None, self.workspace_root
+        )
+
+        content = run_experiment._read_file_condition_C("src/cache/kv.rs", "E5", workspace=workspace)
+
+        self.assertIn("Error: ambiguous file name 'kv.nico'", content)
+        self.assertIn("a/kv.nico", content)
+        self.assertIn("b/kv.nico", content)
+
     def test_condition_c_read_nico_section_uses_workspace_and_rs_mapping(self) -> None:
         self.write(
             "experiment_harness/materials/condition_C/e1/src/cache/kv.nico",
@@ -215,8 +252,10 @@ module cache.kv {
 
         resolved = task_workspace.resolve_workspace_file(workspace, "good.nico")
         self.assertEqual(resolved, workspace.root / "good.nico")
+        resolved_from_src = task_workspace.resolve_workspace_file(workspace, "src/missing/good.nico")
+        self.assertEqual(resolved_from_src, workspace.root / "good.nico")
 
-        for bad_path in ("../good.nico", "/tmp/good.nico", "good.rs", "dup.nico", "src/missing/good.nico"):
+        for bad_path in ("../good.nico", "/tmp/good.nico", "good.rs", "dup.nico"):
             with self.subTest(path=bad_path):
                 with self.assertRaises(task_workspace.WorkspaceError):
                     task_workspace.resolve_workspace_file(workspace, bad_path)

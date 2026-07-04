@@ -252,23 +252,27 @@ class SemanticQueriesTest(unittest.TestCase):
         )
         self.assertIn(
             "required_sections=surface,checks,implementation "
+            "provider_work=read_surface_checks_implementation_then_single_provider_batch "
+            "implementation_policy=update_existing_items_do_not_insert_duplicates "
             "completion_gate=type_surface,constructor_signature,implementation,checks_examples",
             out,
         )
         self.assertIn(
-            "user.profile_service edit_path=src/user/profile_service.nico action=review_type_dependency "
+            "user.profile_service edit_path=src/user/profile_service.nico work=type_reference "
+            "action=review_type_dependency "
             "type=UserProfile categories=imports,checks_examples,call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertIn(
-            "user.store edit_path=src/user/store.nico action=review_type_dependency "
+            "user.store edit_path=src/user/store.nico work=type_reference action=review_type_dependency "
             "type=UserProfile categories=imports,checks_examples,call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
         )
         self.assertIn(
-            "session.service edit_path=src/session/service.nico action=review_type_dependency "
+            "session.service edit_path=src/session/service.nico work=type_reference "
+            "action=review_type_dependency "
             "type=UserProfile categories=imports,checks_examples,call_sites "
             "completion_gate=update_or_verify_all_type_references required_edit=true",
             out,
@@ -278,7 +282,8 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertNotIn("ops" + "=", out)
         self.assertNotIn("op=", out)
         self.assertIn(
-            "user.admin_service edit_path=src/user/admin_service.nico action=add_module_effect "
+            "user.admin_service edit_path=src/user/admin_service.nico work=module_effect "
+            "action=add_module_effect "
             "effect=reads_clock",
             out,
         )
@@ -286,6 +291,11 @@ class SemanticQueriesTest(unittest.TestCase):
         self.assertIn(
             "user.profile_service edit_path=src/user/profile_service.nico action=verify_no_change "
             "effect=reads_clock",
+            out,
+        )
+        self.assertIn(
+            "user.profile_service edit_path=src/user/profile_service.nico work=module_effect "
+            "action=verify_no_change effect=reads_clock",
             out,
         )
         self.assertIn("required_edit=false no_op_edit=forbidden", out)

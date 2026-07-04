@@ -264,17 +264,16 @@ def resolve_workspace_file(
         if resolved is not None:
             return resolved
 
-    if len(requested.parts) == 1:
-        matches = []
-        for candidate in sorted(root.rglob(requested.name)):
-            resolved = _safe_existing_file(candidate, root, suffix, raise_on_symlink=True)
-            if resolved is not None:
-                matches.append(resolved)
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            rel_matches = [m.relative_to(root).as_posix() for m in matches]
-            raise WorkspaceError(f"ambiguous file name '{requested.name}'. Use one of: {rel_matches}")
+    matches = []
+    for candidate in sorted(root.rglob(requested.name)):
+        resolved = _safe_existing_file(candidate, root, suffix, raise_on_symlink=True)
+        if resolved is not None:
+            matches.append(resolved)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        rel_matches = [m.relative_to(root).as_posix() for m in matches]
+        raise WorkspaceError(f"ambiguous file name '{requested.name}'. Use one of: {rel_matches}")
 
     available = [
         p.relative_to(root).as_posix()

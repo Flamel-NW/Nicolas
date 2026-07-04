@@ -254,6 +254,7 @@ def _apply_structural_edit(source: str, edit: dict[str, Any], index: int, op: st
         text = _insert_text_value(edit, index)
         start, end = extract_nico_section_span(source, "implementation")
         scoped = source[start:end]
+        _reject_duplicate_implementation_insert(scoped, edit, text, index)
         changed, count = _insert_before_section_end(scoped, text)
         section = "implementation"
     elif op == "replace_implementation_function":
@@ -483,6 +484,99 @@ def _replace_implementation_function(
     start, end = matches[0]
     replacement_text = _normalized_item_replacement(scoped, start, end, replacement)
     return scoped[:start] + replacement_text + scoped[end:], 1
+
+
+def _reject_duplicate_implementation_insert(
+    scoped: str,
+    edit: dict[str, Any],
+    text: str,
+    index: int,
+) -> None:
+    identity = _implementation_insert_identity(edit, text, index)
+    if identity is None:
+        return
+    item_kind, name = identity
+    if _implementation_item_exists(scoped, item_kind, name):
+        raise NicoEditError(
+            f"edit #{index}: duplicate implementation {item_kind} '{name}' already exists; "
+            "update the existing item with replace_text or replace_implementation_function "
+            "instead of inserting a duplicate"
+        )
+
+
+def _implementation_insert_identity(
+    edit: dict[str, Any],
+    text: str,
+    index: int,
+) -> tuple[str, str] | None:
+    explicit_kind = _optional_implementation_item_kind(edit, index)
+    explicit_name = _optional_identifier_value(edit, "name", index)
+    inferred = _infer_implementation_item_identity(text)
+    if explicit_kind and inferred and explicit_kind != inferred[0]:
+        raise NicoEditError(
+            f"edit #{index}: item_kind '{explicit_kind}' does not match inserted "
+            f"implementation item kind '{inferred[0]}'"
+        )
+    if explicit_name and inferred and explicit_name != inferred[1]:
+        raise NicoEditError(
+            f"edit #{index}: name '{explicit_name}' does not match inserted "
+            f"implementation item name '{inferred[1]}'"
+        )
+
+    if explicit_kind and explicit_name:
+        return explicit_kind, explicit_name
+    if explicit_kind and inferred:
+        return explicit_kind, inferred[1]
+    if explicit_name and inferred:
+        return inferred[0], explicit_name
+    if explicit_kind or explicit_name:
+        raise NicoEditError(
+            f"edit #{index}: insert_implementation_item needs both item_kind and name "
+            "when the inserted text does not contain a recognizable item declaration"
+        )
+    return inferred
+
+
+def _optional_implementation_item_kind(edit: dict[str, Any], index: int) -> str | None:
+    if "item_kind" not in edit:
+        return None
+    value = _non_empty_string(edit, "item_kind", index)
+    if value not in {"type", "fn"}:
+        raise NicoEditError(f"edit #{index}: item_kind must be 'type' or 'fn'")
+    return value
+
+
+def _optional_identifier_value(edit: dict[str, Any], key: str, index: int) -> str | None:
+    if key not in edit:
+        return None
+    return _identifier_value(edit, key, index)
+
+
+def _infer_implementation_item_identity(text: str) -> tuple[str, str] | None:
+    masked = mask_non_code(text)
+    function_match = re.search(
+        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        masked,
+    )
+    if function_match:
+        return "fn", function_match.group(1)
+    type_match = re.search(
+        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|type)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+        masked,
+    )
+    if type_match:
+        return "type", type_match.group(1)
+    return None
+
+
+def _implementation_item_exists(scoped: str, item_kind: str, name: str) -> bool:
+    if item_kind == "fn":
+        return bool(_implementation_function_spans(scoped, name))
+    masked = mask_non_code(scoped)
+    pattern = re.compile(
+        rf"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|type)\s+{re.escape(name)}\b"
+    )
+    return bool(pattern.search(masked))
 
 
 def _interface_item_span(scoped: str, item_kind: str, name: str) -> tuple[int, int]:

@@ -38,6 +38,12 @@ Use the condition C tools to apply the requested changes to the task workspace:
    they do not cancel required example, check, or call-site updates from type
    dependency rows. Do not treat DB `propagated_effects` as a substitute for
    updating `.nico` source when `source_edit_plan` requires a source change.
+   For a provider type shape change, first read the provider `surface`,
+   `checks`, and `implementation` sections, then apply one provider batch that
+   covers imports/effects, interface type/function surface, checks/examples,
+   and implementation. Existing implementation items must be updated, not
+   inserted: use exact-anchor `replace_text` for existing structs/enums/types
+   and `replace_implementation_function` for existing functions.
 4. Retry rule: if an edit fails, retry only the failed file/edit after reading
    the narrowest relevant section or using the returned nearest anchors. Do not
    repeat the full fact discovery pass. For implementation exact-anchor edits,
@@ -50,8 +56,10 @@ Use the condition C tools to apply the requested changes to the task workspace:
    produce the compact final answer. Do not run no-change edits,
    dry-run previews, comment/doc-only edits, formatting cleanup, broad
    re-validation loops, or repeated readbacks after the required edits are
-   already applied. The edit tool performs source structure validation; if it
-   reports success, do not keep editing just to reformat the source.
+   already applied. Do not use remaining turns for doc/comment cleanup,
+   duplicate-removal attempts, or formatting repairs after a source edit batch
+   has reported success. The edit tool performs source structure validation; if
+   it reports success, do not keep editing just to reformat the source.
 6. Do not present complete updated module contents in the final answer.
 
 Final answer format:

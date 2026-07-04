@@ -34,12 +34,18 @@ class PromptProtocolTest(unittest.TestCase):
         self.assertIn("only forbid edits for that row's effect action", prompt)
         self.assertIn("do not invent or assume an anchor", prompt)
         self.assertIn("exact text copied from the narrow source section", prompt)
+        self.assertIn("read the provider `surface`", prompt)
+        self.assertIn("one provider batch", prompt)
+        self.assertIn("Existing implementation items must be updated, not", prompt)
+        self.assertIn("inserted", prompt)
+        self.assertIn("exact-anchor `replace_text` for existing structs/enums/types", prompt)
         self.assertIn("completion gates have been satisfied", prompt)
         self.assertIn("Do not treat", prompt)
         self.assertIn("DB `propagated_effects`", prompt)
         self.assertIn("Stop rule:", prompt)
         self.assertIn("comment/doc-only edits", prompt)
         self.assertIn("formatting cleanup", prompt)
+        self.assertIn("duplicate-removal attempts", prompt)
         self.assertIn("dry-run previews", prompt)
         self.assertIn("Do not present complete updated module contents", prompt)
         self.assertIn("Final answer format:", prompt)
@@ -50,6 +56,7 @@ class PromptProtocolTest(unittest.TestCase):
 
         tools = run_experiment.get_tools("C")
         edit_tool = next(tool for tool in tools if tool["name"] == "edit_nico")
+        self.assertIn("do not insert a duplicate implementation item", edit_tool["description"])
         op_enum = edit_tool["input_schema"]["properties"]["edits"]["items"]["properties"]["op"]["enum"]
         self.assertNotIn(REMOVED_E1_OP, op_enum)
 

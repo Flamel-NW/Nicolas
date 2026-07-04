@@ -474,7 +474,9 @@ def get_tools(condition: str) -> list[dict]:
             "implementation, or file. Structural ops locate the interface, module imports/effects, "
             "interface function effects, or implementation function for you. The entire edit "
             "batch is atomic: any failed check or "
-            "source structure validation error leaves the file unchanged."
+            "source structure validation error leaves the file unchanged. When an implementation "
+            "item already exists, update it with replace_text or replace_implementation_function; "
+            "do not insert a duplicate implementation item."
         ),
         "input_schema": {
             "type": "object",
@@ -518,11 +520,11 @@ def get_tools(condition: str) -> list[dict]:
                             "item_kind": {
                                 "type": "string",
                                 "enum": ["type", "fn"],
-                                "description": "Interface item kind for replace_interface_item.",
+                                "description": "Item kind for replace_interface_item or insert_implementation_item duplicate checks.",
                             },
                             "name": {
                                 "type": "string",
-                                "description": "Interface item name for replace_interface_item.",
+                                "description": "Item name for replace_interface_item or insert_implementation_item duplicate checks.",
                             },
                             "function": {
                                 "type": "string",

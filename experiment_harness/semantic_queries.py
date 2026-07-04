@@ -635,6 +635,8 @@ def _provider_type_edit_plan_lines(
         f"type={type_name} categories=interface_type,interface_function,"
         "implementation,checks_examples,imports_effects "
         "required_sections=surface,checks,implementation "
+        "provider_work=read_surface_checks_implementation_then_single_provider_batch "
+        "implementation_policy=update_existing_items_do_not_insert_duplicates "
         "completion_gate=type_surface,constructor_signature,implementation,checks_examples "
         "required_edit=true reason=provider_module_type_shape_changed"
     ]
@@ -645,7 +647,7 @@ def _provider_type_edit_plan_lines(
         example_text = f" examples={_compact_list(examples)}" if examples else ""
         reason = candidate_reasons.get(module, "type_dependent")
         lines.append(
-            f"- {module} edit_path={dep_path} action=review_type_dependency "
+            f"- {module} edit_path={dep_path} work=type_reference action=review_type_dependency "
             f"type={type_name} categories=imports,checks_examples,call_sites "
             "completion_gate=update_or_verify_all_type_references "
             f"required_edit=true{example_text} reason={reason}"
@@ -731,8 +733,9 @@ def _module_effect_edit_plan_lines(
         edit_path = _source_to_nico_edit_path(source_map.get(module, "unknown"))
         reason = candidate_reasons.get(module, "candidate_module")
         no_op = " no_op_edit=forbidden" if has_effect else ""
+        work_kind = "module_effect"
         lines.append(
-            f"- {module} edit_path={edit_path} action={action} effect={effect} "
+            f"- {module} edit_path={edit_path} work={work_kind} action={action} effect={effect} "
             f"current_module_effects={_compact_list(current_effects)} "
             f"required_edit={str(required).lower()}"
             f"{no_op} reason={reason}"
